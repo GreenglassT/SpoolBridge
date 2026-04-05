@@ -691,6 +691,21 @@ input::placeholder { color: var(--text-dim); }
         </div>
       </form>
     </div>
+
+    <div class="card" style="max-width: 600px; margin-top: 16px;">
+      <h3 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 8px;">Batch Add</h3>
+      <p class="muted" style="font-size: 0.78rem; margin-bottom: 12px;">
+        One spool per line: <span class="mono">Brand, Material, Color, Hex, Price</span><br>
+        Price is optional. Example: <span class="mono">Inland, PLA, Black, 000000, 18.99</span>
+      </p>
+      <textarea id="batch-input" style="width:100%; min-height:120px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); padding:10px; font-family:var(--mono); font-size:0.82rem; resize:vertical;" placeholder="Inland, PLA, Black, 000000, 18.99
+Inland, PLA, Red, ff0000
+Bambu, PETG HF, White, ffffff, 22.99"></textarea>
+      <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+        <button class="btn btn-primary" id="btn-batch" onclick="batchAddSpools()">Create All</button>
+        <span class="muted" id="batch-status" style="font-size:0.8rem;"></span>
+      </div>
+    </div>
   </div>
 
   <!-- ═══ Print History ═══ -->
@@ -1193,6 +1208,69 @@ function setupAddForm() {
       btn.textContent = 'Create Spool';
     }
   });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Batch Add
+// ═══════════════════════════════════════════════════════════════
+
+async function batchAddSpools() {
+  const textarea = document.getElementById('batch-input');
+  const btn = document.getElementById('btn-batch');
+  const status = document.getElementById('batch-status');
+  const lines = textarea.value.trim().split('\n').filter(l => l.trim());
+
+  if (lines.length === 0) { toast('No lines to process', 'error'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Creating...';
+  status.textContent = '';
+
+  let created = 0;
+  let errors = 0;
+
+  for (const line of lines) {
+    const parts = line.split(',').map(s => s.trim());
+    if (parts.length < 4) {
+      status.textContent = `Skipped invalid line: "${line}"`;
+      errors++;
+      continue;
+    }
+
+    const [brand, material, colorName, colorHex, price] = parts;
+    const brandKey = brand.toLowerCase().replace(/\s+/g, '');
+
+    try {
+      await api('/api/spools', {
+        method: 'POST',
+        body: {
+          brand: brandKey === 'bambulab' ? 'bambu' : brandKey,
+          material: material,
+          color_name: colorName,
+          color_hex: colorHex.replace('#', ''),
+          price: price || null,
+        },
+      });
+      created++;
+      status.textContent = `${created}/${lines.length} created...`;
+    } catch(e) {
+      errors++;
+      status.textContent = `Error on "${colorName}": ${e.message}`;
+    }
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Create All';
+  status.textContent = `Done: ${created} created, ${errors} errors`;
+
+  if (created > 0) {
+    toast(`${created} spool${created > 1 ? 's' : ''} created`, 'success');
+    textarea.value = '';
+    await loadSpools();
+    renderDashboard();
+    renderSpools();
+    renderTagSpools();
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
