@@ -162,6 +162,92 @@ def get_vendors():
     return jsonify(r.json())
 
 
+@app.route("/api/tray-status", methods=["GET"])
+def tray_status():
+    r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/spool")
+    spools = r.json()
+
+    trays = {"A1": None, "A2": None, "A3": None, "A4": None, "External": None}
+
+    for s in spools:
+        extra = s.get("extra") or {}
+        active_tray = extra.get("active_tray")
+        if not active_tray:
+            continue
+        tray_name = active_tray.strip('"')
+        fil = s.get("filament") or {}
+        vendor = fil.get("vendor") or {}
+        trays[tray_name] = {
+            "spool_id": s.get("id"),
+            "name": fil.get("name"),
+            "material": fil.get("material"),
+            "color_hex": fil.get("color_hex"),
+            "brand": vendor.get("name"),
+            "remaining_weight": s.get("remaining_weight"),
+            "total_weight": fil.get("weight"),
+        }
+
+    return jsonify(trays)
+
+
+@app.route("/api/activity", methods=["GET"])
+def get_activity():
+    activity_file = SCRIPTS_DIR / "activity.json"
+    if not activity_file.exists():
+        return jsonify([])
+
+    lines = activity_file.read_text().strip().splitlines()
+    events = []
+    for line in lines:
+        line = line.strip()
+        if line:
+            events.append(json.loads(line))
+    events.reverse()
+    return jsonify(events[:50])
+
+
+@app.route("/api/prints", methods=["GET"])
+def get_prints():
+    prints_file = SCRIPTS_DIR / "prints.json"
+    if not prints_file.exists():
+        return jsonify([])
+
+    lines = prints_file.read_text().strip().splitlines()
+    events = []
+    for line in lines:
+        line = line.strip()
+        if line:
+            events.append(json.loads(line))
+    events.reverse()
+    return jsonify(events)
+
+
+@app.route("/api/spools/<int:spool_id>", methods=["PATCH"])
+def update_spool(spool_id):
+    data = request.json or {}
+    allowed = {"remaining_weight", "location"}
+    payload = {k: v for k, v in data.items() if k in allowed}
+
+    try:
+        r = http_requests.patch(
+            f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json=payload,
+        )
+        r.raise_for_status()
+        return jsonify(r.json())
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/spools/<int:spool_id>", methods=["DELETE"])
+def delete_spool(spool_id):
+    try:
+        r = http_requests.delete(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}")
+        r.raise_for_status()
+        return jsonify({"deleted": spool_id})
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
 # ── NFC Tag Generation ────────────────────────────────────────
 
 @app.route("/api/tag/<int:spool_id>")
