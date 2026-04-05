@@ -314,12 +314,21 @@ input::placeholder { color: var(--text-dim); }
 .btn-icon:hover { color: var(--text); border-color: var(--border-light); }
 
 /* ── Tag Panel ──────────────────────────────────────────────── */
+.tag-dropdown {
+  grid-column: 1 / -1;
+  margin: -4px 0 8px;
+}
+.tag-panel-loading {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
 .tag-panel {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 24px;
-  margin-top: 16px;
 }
 .tag-panel h3 {
   font-size: 0.9rem;
@@ -630,7 +639,6 @@ input::placeholder { color: var(--text-dim); }
     </div>
 
     <div id="tag-spools" class="spool-grid"></div>
-    <div id="tag-output" style="display:none;"></div>
   </div>
 
   <!-- ═══ Add Spool ═══ -->
@@ -647,36 +655,17 @@ input::placeholder { color: var(--text-dim); }
         </div>
         <div class="form-group">
           <label class="form-label" for="add-material">Material</label>
-          <select id="add-material">
-            <option>PLA</option>
-            <option>PLA Basic</option>
-            <option>PLA Matte</option>
-            <option>PLA+</option>
-            <option>PLA Silk</option>
-            <option>PLA-CF</option>
-            <option>PLA UV</option>
-            <option>PETG</option>
-            <option>PETG HF</option>
-            <option>PETG-CF</option>
-            <option>ABS</option>
-            <option>ASA</option>
-            <option>TPU</option>
-            <option>PA</option>
-            <option>PA-CF</option>
-            <option>PC</option>
-            <option>PVA</option>
-          </select>
+          <select id="add-material"></select>
         </div>
         <div class="form-group">
-          <label class="form-label" for="add-color-name">Color Name</label>
-          <input type="text" id="add-color-name" placeholder="e.g. Black">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="add-color-hex">Color Hex</label>
+          <label class="form-label" for="add-color-preset">Color</label>
           <div class="color-preview">
-            <input type="text" id="add-color-hex" placeholder="000000" style="flex:1;">
+            <select id="add-color-preset" style="flex:1;">
+              <option value="">— select color —</option>
+            </select>
             <div class="color-dot" id="add-color-preview"></div>
           </div>
+          <input type="hidden" id="add-color-hex">
         </div>
         <div class="form-group">
           <label class="form-label" for="add-name">Filament Name (optional)</label>
@@ -761,7 +750,7 @@ let selectedSpoolId = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
   setupTabs();
-  setupColorPreview();
+  setupCascadingDropdowns();
   setupAddForm();
 
   await loadSpools();
@@ -1099,39 +1088,72 @@ function renderTagSpools() {
     return true;
   });
 
-  document.getElementById('tag-spools').innerHTML = filtered.length
-    ? filtered.map(s => spoolCard(s, true)).join('')
-    : '<div class="empty">No spools found.</div>';
+  if (!filtered.length) {
+    document.getElementById('tag-spools').innerHTML = '<div class="empty">No spools found.</div>';
+    return;
+  }
+
+  // Render all cards, then insert dropdown after the selected card's row
+  const cards = filtered.map(s => spoolCard(s, true));
+  document.getElementById('tag-spools').innerHTML = cards.join('');
+
+  // If a spool is selected, figure out which row it's in and insert dropdown after that row
+  if (selectedTagSpool !== null) {
+    const grid = document.getElementById('tag-spools');
+    const children = [...grid.children];
+    const selectedIdx = filtered.findIndex(s => s.id === selectedTagSpool);
+    if (selectedIdx >= 0) {
+      // Measure how many columns the grid actually has
+      const firstTop = children[0]?.offsetTop;
+      let cols = 1;
+      for (let i = 1; i < children.length; i++) {
+        if (children[i].offsetTop !== firstTop) break;
+        cols++;
+      }
+      // Insert after the last card in this row
+      const rowStart = Math.floor(selectedIdx / cols) * cols;
+      const insertAfterIdx = Math.min(rowStart + cols - 1, children.length - 1);
+      const dropdown = document.createElement('div');
+      dropdown.className = 'tag-dropdown';
+      dropdown.id = 'tag-output-inline';
+      dropdown.innerHTML = '<div class="tag-panel-loading"><span class="spinner"></span> Loading tag data...</div>';
+      children[insertAfterIdx].after(dropdown);
+    }
+  }
 }
 
 async function selectTagSpool(id) {
+  if (selectedTagSpool === id) {
+    selectedTagSpool = null;
+    renderTagSpools();
+    return;
+  }
   selectedTagSpool = id;
   renderTagSpools();
 
   try {
     const data = await api(`/api/tag/${id}`);
     const jsonStr = JSON.stringify(data.tag_json, null, 2);
-
-    document.getElementById('tag-output').style.display = 'block';
-    document.getElementById('tag-output').innerHTML = `
-      <div class="tag-panel">
-        <h3>NFC Tag Data — Spool #${id}</h3>
-
-        <div style="margin-bottom:14px;">
-          <span class="form-label">OpenSpool JSON</span>
-          <span class="dim" style="font-size:0.72rem; margin-left:8px;">MIME: application/json</span>
+    const el = document.getElementById('tag-output-inline');
+    if (el) {
+      el.innerHTML = `
+        <div class="tag-panel">
+          <h3>NFC Tag Data — Spool #${id}</h3>
+          <div style="margin-bottom:14px;">
+            <span class="form-label">OpenSpool JSON</span>
+            <span class="dim" style="font-size:0.72rem; margin-left:8px;">MIME: application/json</span>
+          </div>
+          <div class="tag-json-block" id="tag-json-text">${escHtml(jsonStr)}</div>
+          <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="copyTag()">Copy JSON</button>
+          <div style="margin-top:20px;">
+            <span class="form-label">OpenSpoolman URL</span>
+            <span class="dim" style="font-size:0.72rem; margin-left:8px;">Optional 2nd NDEF record</span>
+          </div>
+          <div class="tag-url" id="tag-url-text">${escHtml(data.openspool_url)}</div>
+          <button class="btn btn-ghost btn-sm" style="margin-top:10px;" onclick="copyUrl()">Copy URL</button>
         </div>
-        <div class="tag-json-block" id="tag-json-text">${escHtml(jsonStr)}</div>
-        <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="copyTag()">Copy JSON</button>
-
-        <div style="margin-top:20px;">
-          <span class="form-label">OpenSpoolman URL</span>
-          <span class="dim" style="font-size:0.72rem; margin-left:8px;">Optional 2nd NDEF record</span>
-        </div>
-        <div class="tag-url" id="tag-url-text">${escHtml(data.openspool_url)}</div>
-        <button class="btn btn-ghost btn-sm" style="margin-top:10px;" onclick="copyUrl()">Copy URL</button>
-      </div>
-    `;
+      `;
+    }
   } catch(e) {
     toast('Failed to load tag data', 'error');
   }
@@ -1160,15 +1182,174 @@ document.addEventListener('DOMContentLoaded', () => {
 // Add Spool
 // ═══════════════════════════════════════════════════════════════
 
-function setupColorPreview() {
-  const hex = document.getElementById('add-color-hex');
-  const dot = document.getElementById('add-color-preview');
-  if (hex && dot) {
-    hex.addEventListener('input', () => {
-      const v = hex.value.replace('#', '');
-      dot.style.background = v.length >= 6 ? `#${v}` : 'var(--bg-input)';
-    });
+const COLOR_CATALOG = {
+  bambu: {
+    "PLA Basic": [
+      {n:"Jade White",hex:"FFFFFF"},{n:"Beige",hex:"F7E6DE"},{n:"Light Gray",hex:"D1D3D5"},
+      {n:"Blue Gray",hex:"5B6579"},{n:"Gray",hex:"8E9089"},{n:"Dark Gray",hex:"545454"},
+      {n:"Silver",hex:"A6A9AA"},{n:"Gold",hex:"E4BD68"},{n:"Bronze",hex:"847D48"},
+      {n:"Brown",hex:"9D432C"},{n:"Cocoa Brown",hex:"6F5034"},{n:"Indigo Purple",hex:"482960"},
+      {n:"Purple",hex:"5E43B7"},{n:"Cobalt Blue",hex:"0056B8"},{n:"Blue",hex:"0A2989"},
+      {n:"Cyan",hex:"0086D6"},{n:"Turquoise",hex:"00B1B7"},{n:"Mistletoe Green",hex:"3F8E43"},
+      {n:"Bambu Green",hex:"00AE42"},{n:"Bright Green",hex:"BECF00"},{n:"Yellow",hex:"F4EE2A"},
+      {n:"Sunflower Yellow",hex:"FEC600"},{n:"Pumpkin Orange",hex:"FF9016"},{n:"Orange",hex:"FF6A13"},
+      {n:"Hot Pink",hex:"F5547C"},{n:"Pink",hex:"F55A74"},{n:"Magenta",hex:"EC008C"},
+      {n:"Maroon Red",hex:"9D2235"},{n:"Red",hex:"C12E1F"},{n:"Black",hex:"000000"}
+    ],
+    "PLA Matte": [
+      {n:"Ivory White",hex:"FFFFFF"},{n:"Bone White",hex:"CBC6B8"},{n:"Latte Brown",hex:"D3B7A7"},
+      {n:"Desert Tan",hex:"E8DBB7"},{n:"Caramel",hex:"AE835B"},{n:"Dark Brown",hex:"7D6556"},
+      {n:"Dark Chocolate",hex:"4D3324"},{n:"Nardo Gray",hex:"757575"},{n:"Ash Gray",hex:"9B9EA0"},
+      {n:"Lilac Purple",hex:"AE96D4"},{n:"Plum",hex:"950051"},{n:"Marine Blue",hex:"0078BF"},
+      {n:"Dark Blue",hex:"042F56"},{n:"Sky Blue",hex:"56B7E6"},{n:"Ice Blue",hex:"A3D8E1"},
+      {n:"Dark Green",hex:"68724D"},{n:"Grass Green",hex:"61C680"},{n:"Apple Green",hex:"C2E189"},
+      {n:"Lemon Yellow",hex:"F7D959"},{n:"Mandarin Orange",hex:"F99963"},{n:"Terracotta",hex:"B15533"},
+      {n:"Sakura Pink",hex:"E8AFCF"},{n:"Scarlet Red",hex:"DE4343"},{n:"Dark Red",hex:"BB3D43"},
+      {n:"Charcoal",hex:"000000"}
+    ],
+    "PLA+": [
+      {n:"White",hex:"FFFFFF"},{n:"Silver",hex:"959698"},{n:"Gray",hex:"AFB1AE"},
+      {n:"Cyan",hex:"009BD8"},{n:"Yellow",hex:"F4D53F"},{n:"Orange",hex:"DC3A27"},
+      {n:"Black",hex:"000000"}
+    ],
+    "PLA Silk": [
+      {n:"White",hex:"FFFFFF"},{n:"Silver",hex:"EAECEB"},{n:"Copper",hex:"5E4B3C"},
+      {n:"Gold",hex:"E5B03D"},{n:"Pink",hex:"EEB1C1"},{n:"Purple",hex:"854CE4"},
+      {n:"Blue",hex:"147BD1"},{n:"Green",hex:"4CE4A0"}
+    ],
+    "PLA-CF": [
+      {n:"Black",hex:"000000"},{n:"Lava Gray",hex:"4D5054"},{n:"Jeans Blue",hex:"6E88BC"},
+      {n:"Royal Blue",hex:"2842AD"},{n:"Iris Purple",hex:"69398E"},{n:"Matcha Green",hex:"5C9748"},
+      {n:"Burgundy Red",hex:"951E23"}
+    ],
+    "PETG Basic": [
+      {n:"White",hex:"FFFFFF"},{n:"Nature",hex:"F9F7F2"},{n:"Gray",hex:"9EA2A2"},
+      {n:"Blue Gray",hex:"688197"},{n:"Gold",hex:"B28B33"},{n:"Purple",hex:"9E007E"},
+      {n:"Lake Blue",hex:"0069B1"},{n:"Blue",hex:"001489"},{n:"Green",hex:"009639"},
+      {n:"Lime Green",hex:"7CD82B"},{n:"Yellow",hex:"FCE300"},{n:"Orange",hex:"FF671F"},
+      {n:"Red",hex:"D6001C"},{n:"Black",hex:"000000"}
+    ],
+    "PETG HF": [
+      {n:"White",hex:"FFFFFF"},{n:"Cream",hex:"F9DFB9"},{n:"Gray",hex:"ADB1B2"},
+      {n:"Dark Gray",hex:"515151"},{n:"Peanut Brown",hex:"875718"},{n:"Forest Green",hex:"39541A"},
+      {n:"Lime Green",hex:"6EE53C"},{n:"Green",hex:"00AE42"},{n:"Lake Blue",hex:"1F79E5"},
+      {n:"Blue",hex:"002E96"},{n:"Yellow",hex:"FFD00B"},{n:"Orange",hex:"F75403"},
+      {n:"Red",hex:"EB3A3A"},{n:"Black",hex:"000000"}
+    ],
+    "PETG-CF": [
+      {n:"Black",hex:"000000"},{n:"Titan Gray",hex:"565656"},{n:"Indigo Blue",hex:"324585"},
+      {n:"Malachite Green",hex:"16B08E"},{n:"Violet Purple",hex:"583061"},{n:"Brick Red",hex:"9F332A"}
+    ],
+    "ABS": [
+      {n:"White",hex:"FFFFFF"},{n:"Silver",hex:"87909A"},{n:"Beige",hex:"DFD1A7"},
+      {n:"Lavender",hex:"7248BD"},{n:"Azure",hex:"489FDF"},{n:"Navy Blue",hex:"0C2340"},
+      {n:"Blue",hex:"0A2CA5"},{n:"Olive",hex:"789D4A"},{n:"Mint",hex:"7AE1BF"},
+      {n:"Bambu Green",hex:"00AE42"},{n:"Yellow",hex:"FCE900"},{n:"Tangerine Yellow",hex:"FFC72C"},
+      {n:"Orange",hex:"FF6A13"},{n:"Red",hex:"D32941"},{n:"Purple",hex:"AF1685"},
+      {n:"Black",hex:"000000"}
+    ],
+    "ASA": [
+      {n:"White",hex:"FFFAF2"},{n:"Gray",hex:"8A949E"},{n:"Green",hex:"00A6A0"},
+      {n:"Blue",hex:"2140B4"},{n:"Red",hex:"E02928"},{n:"Black",hex:"000000"}
+    ],
+    "TPU": [
+      {n:"White",hex:"FFFFFF"},{n:"Gray",hex:"898D8D"},{n:"Blue",hex:"0072CE"},
+      {n:"Red",hex:"C8102E"},{n:"Yellow",hex:"F3E600"},{n:"Black",hex:"101820"}
+    ],
+    "PA": [
+      {n:"White",hex:"EAEAE4"},{n:"Yellow",hex:"FFCE00"},{n:"Lime",hex:"C5ED48"},
+      {n:"Orange",hex:"FF4800"},{n:"Blue",hex:"75AED8"},{n:"Brown",hex:"5B492F"},
+      {n:"Gray",hex:"353533"},{n:"Black",hex:"000000"}
+    ],
+    "PA-CF": [{n:"Black",hex:"000000"}],
+    "PC": [
+      {n:"Transparent",hex:"F5F5F5"},{n:"White",hex:"FFFFFF"},
+      {n:"Clear Black",hex:"5A5161"},{n:"Black",hex:"000000"}
+    ],
+    "PVA": [{n:"Natural",hex:"F0F1A8"}],
+    "Support W": [{n:"Nature",hex:"FFFFFF"},{n:"Black",hex:"000000"}]
+  },
+  inland: {
+    "PLA": [
+      {n:"White",hex:"E0E3E3"},{n:"Bone White",hex:"ABA18F"},{n:"Wood",hex:"DEB98F"},
+      {n:"Grey",hex:"6F7983"},{n:"Silver",hex:"8A8F92"},{n:"Gold",hex:"D7B536"},
+      {n:"Light Blue",hex:"3CA4B8"},{n:"Egyptian Blue",hex:"075AAC"},{n:"Blue",hex:"044482"},
+      {n:"Green",hex:"407166"},{n:"Military Green",hex:"5B6D37"},{n:"Glass Yellow",hex:"D0D764"},
+      {n:"Coral",hex:"C16062"},{n:"Pink",hex:"FC97AF"},{n:"Purple",hex:"6F5793"},
+      {n:"Red",hex:"C43220"},{n:"True Red",hex:"B13137"},{n:"Matte Orange",hex:"ED9344"},
+      {n:"Black",hex:"27272C"}
+    ],
+    "PLA+": [
+      {n:"White",hex:"FFFFFF"},{n:"Bone White",hex:"ABA18F"},{n:"Silver",hex:"868A8B"},
+      {n:"Dark Blue",hex:"2C3353"},{n:"Blue",hex:"054990"},{n:"Light Blue",hex:"079FBF"},
+      {n:"Pink",hex:"F291A4"},{n:"Magenta",hex:"DE2B60"},{n:"Orange",hex:"FB8B5A"},
+      {n:"Yellow",hex:"F8D008"},{n:"Black",hex:"2B272B"}
+    ],
+    "PETG": [
+      {n:"White",hex:"EEEEEE"},{n:"Transparent",hex:"D1D6D1"},{n:"Blue",hex:"084480"},
+      {n:"Green",hex:"2B783E"},{n:"Magenta",hex:"E14170"},{n:"Red",hex:"CB4847"},
+      {n:"True Red",hex:"97392B"},{n:"Black",hex:"1A1A1A"}
+    ],
+    "ABS": [
+      {n:"White",hex:"E8E8E4"},{n:"Gray",hex:"8A8F8A"},{n:"Blue",hex:"1A4A8A"},
+      {n:"Green",hex:"3A7A40"},{n:"Yellow",hex:"F0D020"},{n:"Orange",hex:"E8712F"},
+      {n:"Red",hex:"B82828"},{n:"Black",hex:"1A1A1A"}
+    ],
+    "TPU": [
+      {n:"Natural",hex:"E8EDE8"},{n:"Translucent Green",hex:"80CC03"},
+      {n:"Translucent Purple",hex:"9B72B0"},{n:"Black",hex:"1A1A1A"}
+    ]
   }
+};
+
+function getMaterials(brand) {
+  return Object.keys(COLOR_CATALOG[brand] || {});
+}
+
+function getColors(brand, material) {
+  return (COLOR_CATALOG[brand] || {})[material] || [];
+}
+
+function populateMaterials() {
+  const brand = document.getElementById('add-brand').value;
+  const matSel = document.getElementById('add-material');
+  const mats = getMaterials(brand);
+  matSel.innerHTML = mats.map(m => `<option>${m}</option>`).join('');
+  populateColors();
+}
+
+function populateColors() {
+  const brand = document.getElementById('add-brand').value;
+  const material = document.getElementById('add-material').value;
+  const colorSel = document.getElementById('add-color-preset');
+  const colors = getColors(brand, material);
+
+  let html = '<option value="">— select color —</option>';
+  for (const c of colors) {
+    html += `<option value="${c.hex}" data-name="${c.n}">${c.n}</option>`;
+  }
+  colorSel.innerHTML = html;
+
+  document.getElementById('add-color-hex').value = '';
+  document.getElementById('add-color-preview').style.background = 'var(--bg-input)';
+}
+
+function onColorPresetChange() {
+  const sel = document.getElementById('add-color-preset');
+  if (sel.value) {
+    document.getElementById('add-color-hex').value = sel.value;
+    document.getElementById('add-color-preview').style.background = `#${sel.value}`;
+  } else {
+    document.getElementById('add-color-hex').value = '';
+    document.getElementById('add-color-preview').style.background = 'var(--bg-input)';
+  }
+}
+
+function setupCascadingDropdowns() {
+  document.getElementById('add-brand').addEventListener('change', populateMaterials);
+  document.getElementById('add-material').addEventListener('change', populateColors);
+  document.getElementById('add-color-preset').addEventListener('change', onColorPresetChange);
+  populateMaterials(); // initialize
 }
 
 function setupAddForm() {
@@ -1179,10 +1360,13 @@ function setupAddForm() {
     btn.innerHTML = '<span class="spinner"></span> Creating...';
 
     try {
+      const presetSel = document.getElementById('add-color-preset');
+      const presetOpt = presetSel.options[presetSel.selectedIndex];
+      const colorName = presetOpt && presetOpt.dataset.name ? presetOpt.dataset.name : '';
       const data = {
         brand: document.getElementById('add-brand').value,
         material: document.getElementById('add-material').value,
-        color_name: document.getElementById('add-color-name').value,
+        color_name: colorName,
         color_hex: document.getElementById('add-color-hex').value.replace('#', ''),
         name: document.getElementById('add-name').value,
         price: document.getElementById('add-price').value || null,
@@ -1193,6 +1377,7 @@ function setupAddForm() {
       if (result.id) {
         toast(`Spool #${result.id} created`, 'success');
         e.target.reset();
+        populateMaterials();
         document.getElementById('add-color-preview').style.background = 'var(--bg-input)';
         await loadSpools();
         renderDashboard();

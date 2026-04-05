@@ -73,6 +73,7 @@ log = logging.getLogger("bridge")
 current_vt_tray = {}       # external spool (virtual tray)
 current_ams_trays = {}     # {slot_id: {type, color, tag_uid, remain}}
 active_spool_id = None     # Spoolman spool ID for external slot
+last_gcode_state = ""      # track state transitions to fire finish only once
 
 
 # ============================================================
@@ -175,8 +176,11 @@ def update_spool_weight(spool_id, used_grams):
 SCRIPT_DIR = Path(__file__).parent
 
 
+_activity_line_count = 0
+
 def log_event(event_type, tray="", spool_id=None, spool_name="", detail=""):
     """Append an event to activity.json (JSON-lines, capped at 200 entries)."""
+    global _activity_line_count
     try:
         path = SCRIPT_DIR / "activity.json"
         entry = json.dumps({
@@ -187,14 +191,17 @@ def log_event(event_type, tray="", spool_id=None, spool_name="", detail=""):
             "spool_name": spool_name,
             "detail": detail,
         })
-        # Read existing lines, append new, cap at 200
-        lines = []
-        if path.exists():
-            lines = path.read_text().strip().splitlines()
-        lines.append(entry)
-        if len(lines) > 200:
-            lines = lines[-200:]
-        path.write_text("\n".join(lines) + "\n")
+        # Count lines on first call
+        if _activity_line_count == 0 and path.exists():
+            _activity_line_count = sum(1 for _ in open(path))
+        # Append-only most of the time; trim only when over cap
+        with open(path, "a") as f:
+            f.write(entry + "\n")
+        _activity_line_count += 1
+        if _activity_line_count > 250:
+            lines = path.read_text().strip().splitlines()[-200:]
+            path.write_text("\n".join(lines) + "\n")
+            _activity_line_count = len(lines)
     except Exception as e:
         log.error(f"Failed to write activity.json: {e}")
 
@@ -329,8 +336,7 @@ def handle_ams_change(new_trays):
     global current_ams_trays
 
     for slot_key, tray_data in new_trays.items():
-        old_data = current_ams_trays.get(slot_key)
-        if old_data == tray_data:
+        if current_ams_trays.get(slot_key) == tray_data:
             continue
 
         tag_uid = tray_data.get("tag_uid", "")
@@ -351,6 +357,7 @@ def handle_ams_change(new_trays):
                     f"AMS Tray {tray_num}: Unknown tag {tag_uid[:8]}... "
                     f"({tray_data['type']} #{tray_data['color']})"
                 )
+                log_event("tray_load", tray=f"A{tray_num}", detail=f"Unknown tag {tag_uid[:8]}... ({tray_data['type']} #{tray_data['color']})")
         else:
             # Third-party spool in AMS, no RFID — try color+material match
             spool = find_spool_by_color_material(tray_data["color"], tray_data["type"])
@@ -362,8 +369,11 @@ def handle_ams_change(new_trays):
                 )
                 update_spool_tray(spool["id"], f"A{tray_num}")
                 log_event("tray_load", tray=f"A{tray_num}", spool_id=spool["id"], spool_name=f.get("name", "?"), detail="color match")
+            else:
+                log.info(f"AMS Tray {tray_num}: No match for {tray_data['type']} #{tray_data['color']}")
+                log_event("tray_load", tray=f"A{tray_num}", detail=f"Unmatched: {tray_data['type']} #{tray_data['color']}")
 
-    current_ams_trays = new_trays
+        current_ams_trays[slot_key] = tray_data
 
 
 def handle_print_finish(finish_data):
@@ -449,10 +459,16 @@ def on_message(client, userdata, msg):
     if ams:
         handle_ams_change(ams)
 
-    # Check for print completion
-    finish = parse_print_finish(data)
-    if finish:
-        handle_print_finish(finish)
+    # Check for print completion — only fire on state *transition* to FINISH/FAILED
+    global last_gcode_state
+    gcode_state = data.get("print", {}).get("gcode_state", "")
+    if gcode_state and gcode_state != last_gcode_state:
+        old_state = last_gcode_state
+        last_gcode_state = gcode_state
+        if gcode_state in ("FINISH", "FAILED") and old_state not in ("FINISH", "FAILED"):
+            finish = parse_print_finish(data)
+            if finish:
+                handle_print_finish(finish)
 
 
 # ============================================================
