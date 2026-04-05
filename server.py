@@ -156,10 +156,74 @@ def get_filaments():
     return jsonify(r.json())
 
 
+@app.route("/api/filaments", methods=["POST"])
+def create_filament():
+    data = request.json or {}
+    try:
+        r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/filament", json=data)
+        r.raise_for_status()
+        return jsonify(r.json())
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/filaments/<int:filament_id>", methods=["PATCH"])
+def update_filament(filament_id):
+    data = request.json or {}
+    try:
+        r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/filament/{filament_id}", json=data)
+        r.raise_for_status()
+        return jsonify(r.json())
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/filaments/<int:filament_id>", methods=["DELETE"])
+def delete_filament(filament_id):
+    try:
+        r = http_requests.delete(f"{SPOOLMAN_URL}/api/v1/filament/{filament_id}")
+        r.raise_for_status()
+        return jsonify({"deleted": filament_id})
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
 @app.route("/api/vendors", methods=["GET"])
 def get_vendors():
     r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/vendor")
     return jsonify(r.json())
+
+
+@app.route("/api/vendors", methods=["POST"])
+def create_vendor():
+    data = request.json or {}
+    try:
+        r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/vendor", json=data)
+        r.raise_for_status()
+        return jsonify(r.json())
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/vendors/<int:vendor_id>", methods=["PATCH"])
+def update_vendor(vendor_id):
+    data = request.json or {}
+    try:
+        r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/vendor/{vendor_id}", json=data)
+        r.raise_for_status()
+        return jsonify(r.json())
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/vendors/<int:vendor_id>", methods=["DELETE"])
+def delete_vendor(vendor_id):
+    try:
+        r = http_requests.delete(f"{SPOOLMAN_URL}/api/v1/vendor/{vendor_id}")
+        r.raise_for_status()
+        return jsonify({"deleted": vendor_id})
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
 
 
 @app.route("/api/tray-status", methods=["GET"])
@@ -204,42 +268,28 @@ def tray_status():
     return jsonify(trays)
 
 
+def _read_jsonl(path, limit=None):
+    if not path.exists():
+        return []
+    events = [json.loads(l) for l in path.read_text().strip().splitlines() if l.strip()]
+    events.reverse()
+    return events[:limit] if limit else events
+
+
 @app.route("/api/activity", methods=["GET"])
 def get_activity():
-    activity_file = SCRIPTS_DIR / "activity.json"
-    if not activity_file.exists():
-        return jsonify([])
-
-    lines = activity_file.read_text().strip().splitlines()
-    events = []
-    for line in lines:
-        line = line.strip()
-        if line:
-            events.append(json.loads(line))
-    events.reverse()
-    return jsonify(events[:50])
+    return jsonify(_read_jsonl(SCRIPTS_DIR / "activity.json", limit=50))
 
 
 @app.route("/api/prints", methods=["GET"])
 def get_prints():
-    prints_file = SCRIPTS_DIR / "prints.json"
-    if not prints_file.exists():
-        return jsonify([])
-
-    lines = prints_file.read_text().strip().splitlines()
-    events = []
-    for line in lines:
-        line = line.strip()
-        if line:
-            events.append(json.loads(line))
-    events.reverse()
-    return jsonify(events)
+    return jsonify(_read_jsonl(SCRIPTS_DIR / "prints.json"))
 
 
 @app.route("/api/spools/<int:spool_id>", methods=["PATCH"])
 def update_spool(spool_id):
     data = request.json or {}
-    allowed = {"remaining_weight", "location"}
+    allowed = {"remaining_weight", "location", "archived"}
     payload = {k: v for k, v in data.items() if k in allowed}
 
     try:
@@ -258,6 +308,95 @@ def delete_spool(spool_id):
         r = http_requests.delete(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}")
         r.raise_for_status()
         return jsonify({"deleted": spool_id})
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/printer-status")
+def printer_status():
+    state_file = SCRIPTS_DIR / "bridge_state.json"
+    if not state_file.exists():
+        return jsonify({"connected": False, "ams_environment": {}, "unknown_spools": []})
+    try:
+        state = json.loads(state_file.read_text())
+        return jsonify(state)
+    except Exception:
+        return jsonify({"connected": False, "ams_environment": {}, "unknown_spools": []})
+
+
+@app.route("/api/link-spool", methods=["POST"])
+def link_spool():
+    data = request.json or {}
+    tag_uid = data.get("tag_uid", "")
+    tray_type = data.get("type", "PLA")
+    color_hex = data.get("color_hex", "000000").lstrip("#")[:6]
+    name = data.get("name", f"{tray_type} {color_hex}")
+    tray = data.get("tray", "")
+
+    if not tag_uid:
+        return jsonify({"error": "tag_uid is required"}), 400
+
+    # Find or create filament
+    filaments = http_requests.get(f"{SPOOLMAN_URL}/api/v1/filament").json()
+    filament_id = None
+    for f in filaments:
+        f_mat = (f.get("material") or "").lower()
+        f_color = (f.get("color_hex") or "").lower()
+        if f_mat == tray_type.lower() and f_color == color_hex.lower():
+            filament_id = f["id"]
+            break
+
+    if not filament_id:
+        fil_r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/filament", json={
+            "name": name,
+            "material": tray_type,
+            "color_hex": color_hex,
+            "density": 1.24,
+            "diameter": 1.75,
+            "weight": 1000.0,
+            "spool_weight": 251.0,
+            "vendor_id": 1,
+        })
+        filament_id = fil_r.json().get("id")
+
+    spool_r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/spool", json={
+        "filament_id": filament_id,
+        "remaining_weight": 1000,
+        "location": "AMS 2 Pro",
+    })
+    spool = spool_r.json()
+    spool_id = spool.get("id")
+
+    if not spool_id:
+        return jsonify({"error": "Failed to create spool"}), 500
+
+    http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json={
+        "extra": {
+            "tag": f'"{tag_uid}"',
+            "active_tray": f'"{tray}"',
+        },
+    })
+
+    return jsonify({"spool_id": spool_id, "linked_tag": tag_uid})
+
+
+@app.route("/api/spools/<int:spool_id>/assign-tray", methods=["POST"])
+def assign_tray(spool_id):
+    data = request.json or {}
+    tray = data.get("tray", "")
+    if tray and tray not in ("A1", "A2", "A3", "A4", "External"):
+        return jsonify({"error": "Invalid tray. Use A1-A4, External, or empty to unassign."}), 400
+
+    location = "AMS 2 Pro" if tray.startswith("A") else "External" if tray == "External" else "Storage"
+    payload = {
+        "extra": {"active_tray": f'"{tray}"' if tray else '""'},
+        "location": location,
+    }
+
+    try:
+        r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json=payload)
+        r.raise_for_status()
+        return jsonify(r.json())
     except http_requests.exceptions.RequestException as e:
         return jsonify({"error": str(e)}), 502
 
@@ -349,6 +488,25 @@ def bridge_status():
         pass
 
     return jsonify({"active": active, "logs": logs})
+
+
+ALLOWED_BRIDGE_ACTIONS = {"start", "stop", "restart"}
+
+
+@app.route("/api/bridge/<action>", methods=["POST"])
+def bridge_action(action):
+    if action not in ALLOWED_BRIDGE_ACTIONS:
+        return jsonify({"error": "Invalid action"}), 400
+    try:
+        result = subprocess.run(
+            ["systemctl", action, "openspool-bridge"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            return jsonify({"status": "ok"})
+        return jsonify({"error": result.stderr.strip() or f"Failed to {action} service"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/config")
