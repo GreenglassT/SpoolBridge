@@ -74,6 +74,9 @@ current_vt_tray = {}       # external spool (virtual tray)
 current_ams_trays = {}     # {slot_id: {type, color, tag_uid, remain}}
 active_spool_id = None     # Spoolman spool ID for external slot
 last_gcode_state = ""      # track state transitions to fire finish only once
+bridge_state_path = Path(__file__).parent / "bridge_state.json"
+unknown_spools = {}        # {tray_key: {type, color, tag_uid, tray_num, tray}}
+ams_environment = {}       # {humidity, temp}
 
 
 # ============================================================
@@ -225,6 +228,21 @@ def log_print(spool_id, spool_name, material, color_hex, grams_used, status):
         log.error(f"Failed to write prints.json: {e}")
 
 
+def write_bridge_state():
+    """Write current bridge state to a JSON file for the web server to read."""
+    state = {
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "connected": True,
+        "ams_environment": ams_environment,
+        "unknown_spools": list(unknown_spools.values()),
+        "current_vt_tray": current_vt_tray,
+    }
+    try:
+        bridge_state_path.write_text(json.dumps(state, indent=2))
+    except Exception as e:
+        log.error(f"Failed to write bridge_state.json: {e}")
+
+
 # ============================================================
 # MQTT MESSAGE PARSING
 # ============================================================
@@ -270,6 +288,19 @@ def parse_ams_trays(msg_data):
                 }
 
     return trays
+
+
+def parse_ams_environment(msg_data):
+    """Extract AMS humidity and temperature from MQTT report."""
+    ams_list = msg_data.get("print", {}).get("ams", {}).get("ams", [])
+    if not ams_list:
+        return None
+    unit = ams_list[0]
+    humidity = unit.get("humidity", "")
+    temp = unit.get("temp", "")
+    if humidity or temp:
+        return {"humidity": humidity, "temp": temp}
+    return None
 
 
 def parse_print_finish(msg_data):
@@ -352,12 +383,20 @@ def handle_ams_change(new_trays):
                 )
                 update_spool_tray(spool["id"], f"A{tray_num}")
                 log_event("tray_load", tray=f"A{tray_num}", spool_id=spool["id"], spool_name=f.get("name", "?"), detail=f"tag {tag_uid[:8]}...")
+                unknown_spools.pop(slot_key, None)
             else:
                 log.info(
                     f"AMS Tray {tray_num}: Unknown tag {tag_uid[:8]}... "
                     f"({tray_data['type']} #{tray_data['color']})"
                 )
                 log_event("tray_load", tray=f"A{tray_num}", detail=f"Unknown tag {tag_uid[:8]}... ({tray_data['type']} #{tray_data['color']})")
+                unknown_spools[slot_key] = {
+                    "tray": f"A{tray_num}",
+                    "type": tray_data["type"],
+                    "color": tray_data["color"],
+                    "tag_uid": tag_uid,
+                    "tray_num": tray_num,
+                }
         else:
             # Third-party spool in AMS, no RFID — try color+material match
             spool = find_spool_by_color_material(tray_data["color"], tray_data["type"])
@@ -441,6 +480,10 @@ def on_connect(client, userdata, flags, rc, properties=None):
 
 def on_disconnect(client, userdata, rc, properties=None, reason_code=None):
     log.warning(f"Disconnected from MQTT (rc={rc}), reconnecting...")
+    try:
+        bridge_state_path.write_text(json.dumps({"connected": False, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}))
+    except Exception:
+        pass
 
 
 def on_message(client, userdata, msg):
@@ -458,6 +501,15 @@ def on_message(client, userdata, msg):
     ams = parse_ams_trays(data)
     if ams:
         handle_ams_change(ams)
+
+    # Parse AMS environment
+    global ams_environment
+    env = parse_ams_environment(data)
+    if env:
+        ams_environment = env
+
+    # Write shared state for web server
+    write_bridge_state()
 
     # Check for print completion — only fire on state *transition* to FINISH/FAILED
     global last_gcode_state
