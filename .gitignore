@@ -7,3 +7,5 @@ bridge.env
 __pycache__/
 .playwright-mcp/
 *.png
+Filament Swatches/
+docs/
