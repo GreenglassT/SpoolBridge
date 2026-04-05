@@ -31,15 +31,11 @@ import requests
 # CONFIGURATION — override via environment or .env file
 # ============================================================
 
-def load_env():
-    """Load .env file from script directory if it exists."""
-    env_path = Path(__file__).parent / "bridge.env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, val = line.partition("=")
-                os.environ.setdefault(key.strip(), val.strip().strip('"'))
+from config import (
+    load_env, TRAY_EXTERNAL,
+    get_openspool_type, get_filament_code, tray_location,
+    extra_quote, extra_unquote,
+)
 
 load_env()
 
@@ -77,6 +73,10 @@ last_gcode_state = ""      # track state transitions to fire finish only once
 bridge_state_path = Path(__file__).parent / "bridge_state.json"
 unknown_spools = {}        # {tray_key: {type, color, tag_uid, tray_num, tray}}
 ams_environment = {}       # {humidity, temp}
+_bridge_state_dirty = True # write bridge_state.json only when state changed
+mqtt_client = None          # set in main(); used by publish_external_filament()
+bridge_commands_path = Path(__file__).parent / "bridge_commands.json"
+
 
 
 # ============================================================
@@ -101,12 +101,13 @@ def sm_patch(endpoint, data):
     return r.json()
 
 
-def find_spool_by_color_material(color_hex, material):
+def find_spool_by_color_material(color_hex, material, spools=None):
     """Find a Spoolman spool matching color + material type."""
     color_hex = color_hex.lower().rstrip("ff")[:6]
     material = material.strip()
 
-    spools = sm_get("spool")
+    if spools is None:
+        spools = sm_get("spool")
     candidates = []
 
     for s in spools:
@@ -135,15 +136,16 @@ def find_spool_by_color_material(color_hex, material):
     return None
 
 
-def find_spool_by_tag(tag_uid):
-    """Find a Spoolman spool by its RFID tag UID."""
-    if not tag_uid:
+def find_spool_by_tag(tag_uid, tray_uuid="", spools=None):
+    """Find a Spoolman spool by RFID tag UID or Bambu tray UUID."""
+    if not tag_uid and not tray_uuid:
         return None
-    spools = sm_get("spool")
+    if spools is None:
+        spools = sm_get("spool")
     for s in spools:
         extra = s.get("extra", {})
-        tag = extra.get("tag", "").strip('"')
-        if tag and tag == tag_uid:
+        tag = extra_unquote(extra.get("tag", ""))
+        if tag and (tag == tag_uid or tag == tray_uuid):
             return s
     return None
 
@@ -152,8 +154,8 @@ def update_spool_tray(spool_id, tray_name):
     """Set which tray a spool is in."""
     try:
         sm_patch(f"spool/{spool_id}", {
-            "extra": {"active_tray": f'"{tray_name}"'},
-            "location": "AMS 2 Pro" if tray_name.startswith("A") else "External",
+            "extra": {"active_tray": extra_quote(tray_name)},
+            "location": tray_location(tray_name),
         })
         log.info(f"Spool #{spool_id} → {tray_name}")
     except Exception as e:
@@ -170,6 +172,42 @@ def update_spool_weight(spool_id, used_grams):
         log.info(f"Spool #{spool_id}: {current:.0f}g → {new_weight:.0f}g (-{used_grams:.1f}g)")
     except Exception as e:
         log.error(f"Failed to update weight for spool #{spool_id}: {e}")
+
+
+def publish_external_filament(spool):
+    """Publish MQTT command to configure the printer's external tray."""
+    f = spool.get("filament", {})
+    material = (f.get("material") or "PLA").strip()
+    color_hex = (f.get("color_hex") or "000000").lower()
+    tray_type = get_openspool_type(material)
+    filament_code = get_filament_code(tray_type)
+
+    nozzle_min = f.get("settings_extruder_temp") or 190
+    nozzle_max = nozzle_min + 20 if f.get("settings_extruder_temp") else 220
+
+    tray_color = (color_hex[:6] + "FF").upper()
+
+    payload = {
+        "print": {
+            "sequence_id": "0",
+            "command": "ams_filament_setting",
+            "ams_id": 255,
+            "tray_id": 254,
+            "tray_color": tray_color,
+            "nozzle_temp_min": nozzle_min,
+            "nozzle_temp_max": nozzle_max,
+            "tray_type": tray_type,
+            "setting_id": "",
+            "tray_info_idx": filament_code,
+        }
+    }
+
+    request_topic = f"device/{PRINTER_SERIAL}/request"
+    mqtt_client.publish(request_topic, json.dumps(payload))
+    log.info(
+        f"Published external filament: {tray_type} #{color_hex} "
+        f"({nozzle_min}-{nozzle_max}°C, code={filament_code})"
+    )
 
 
 # ============================================================
@@ -230,6 +268,10 @@ def log_print(spool_id, spool_name, material, color_hex, grams_used, status):
 
 def write_bridge_state():
     """Write current bridge state to a JSON file for the web server to read."""
+    global _bridge_state_dirty
+    if not _bridge_state_dirty:
+        return
+    _bridge_state_dirty = False
     state = {
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "connected": True,
@@ -241,6 +283,49 @@ def write_bridge_state():
         bridge_state_path.write_text(json.dumps(state, indent=2))
     except Exception as e:
         log.error(f"Failed to write bridge_state.json: {e}")
+
+
+def process_commands():
+    """Check for and execute pending commands from the web server."""
+    tmp = bridge_commands_path.with_suffix(".processing")
+    try:
+        bridge_commands_path.rename(tmp)
+    except FileNotFoundError:
+        return
+
+    try:
+        raw = tmp.read_text().strip()
+        tmp.unlink(missing_ok=True)
+        if not raw:
+            return
+
+        cmd = json.loads(raw)
+        if cmd.get("command") == "load_external":
+            spool_id = cmd.get("spool_id")
+            if not spool_id:
+                log.error("load_external command missing spool_id")
+                return
+            try:
+                spool = sm_get(f"spool/{spool_id}")
+            except Exception as e:
+                log.error(f"Failed to fetch spool #{spool_id}: {e}")
+                return
+            publish_external_filament(spool)
+            update_spool_tray(spool_id, TRAY_EXTERNAL)
+            f = spool.get("filament", {})
+            log_event(
+                "external_load",
+                tray=TRAY_EXTERNAL,
+                spool_id=spool_id,
+                spool_name=f.get("name", "?"),
+                detail="Loaded via API"
+            )
+        else:
+            log.warning(f"Unknown command: {cmd.get('command')}")
+    except json.JSONDecodeError:
+        log.error("Invalid JSON in bridge_commands.json")
+    except Exception as e:
+        log.error(f"Error processing command: {e}")
 
 
 # ============================================================
@@ -284,6 +369,7 @@ def parse_ams_trays(msg_data):
                     "type": tray_type,
                     "color": (tray.get("tray_color") or "")[:6],
                     "tag_uid": tray.get("tag_uid", ""),
+                    "tray_uuid": tray.get("tray_uuid", ""),
                     "remain": tray.get("remain", -1),
                 }
 
@@ -328,13 +414,14 @@ def parse_print_finish(msg_data):
 
 def handle_vt_tray_change(new_vt):
     """Handle external spool change (OpenSpool Mini tap)."""
-    global current_vt_tray, active_spool_id
+    global current_vt_tray, active_spool_id, _bridge_state_dirty
 
     if new_vt == current_vt_tray:
         return
 
     old_vt = current_vt_tray
     current_vt_tray = new_vt
+    _bridge_state_dirty = True
 
     log.info(
         f"External spool changed: {new_vt['type']} #{new_vt['color']} "
@@ -351,30 +438,36 @@ def handle_vt_tray_change(new_vt):
             f"Matched → Spool #{spool['id']}: "
             f"{f.get('name', '?')} ({f.get('material', '?')})"
         )
-        update_spool_tray(spool["id"], "External")
-        log_event("external_tap", tray="External", spool_id=spool["id"], spool_name=f.get("name", "?"), detail=f"{f.get('material', '?')} #{new_vt['color']}")
+        update_spool_tray(spool["id"], TRAY_EXTERNAL)
+        log_event("external_tap", tray=TRAY_EXTERNAL, spool_id=spool["id"], spool_name=f.get("name", "?"), detail=f"{f.get('material', '?')} #{new_vt['color']}")
     else:
         active_spool_id = None
         log.warning(
             f"No Spoolman spool matches {new_vt['type']} #{new_vt['color']}. "
             f"Create it in Spoolman first."
         )
-        log_event("external_tap", tray="External", detail=f"Unmatched: {new_vt['type']} #{new_vt['color']}")
+        log_event("external_tap", tray=TRAY_EXTERNAL, detail=f"Unmatched: {new_vt['type']} #{new_vt['color']}")
 
 
 def handle_ams_change(new_trays):
     """Handle AMS tray changes (Bambu RFID detection)."""
-    global current_ams_trays
+    global current_ams_trays, _bridge_state_dirty
 
-    for slot_key, tray_data in new_trays.items():
-        if current_ams_trays.get(slot_key) == tray_data:
-            continue
+    # Fetch spools once for all tray lookups (avoids N+1 API calls)
+    changed = [k for k, v in new_trays.items() if current_ams_trays.get(k) != v]
+    if not changed:
+        return
+    all_spools = sm_get("spool")
+
+    for slot_key in changed:
+        tray_data = new_trays[slot_key]
 
         tag_uid = tray_data.get("tag_uid", "")
+        tray_uuid = tray_data.get("tray_uuid", "")
         tray_num = int(slot_key.split("_")[1]) + 1
 
-        if tag_uid:
-            spool = find_spool_by_tag(tag_uid)
+        if tag_uid or tray_uuid:
+            spool = find_spool_by_tag(tag_uid, tray_uuid, spools=all_spools)
             if spool:
                 f = spool.get("filament", {})
                 log.info(
@@ -399,7 +492,7 @@ def handle_ams_change(new_trays):
                 }
         else:
             # Third-party spool in AMS, no RFID — try color+material match
-            spool = find_spool_by_color_material(tray_data["color"], tray_data["type"])
+            spool = find_spool_by_color_material(tray_data["color"], tray_data["type"], spools=all_spools)
             if spool:
                 f = spool.get("filament", {})
                 log.info(
@@ -413,6 +506,7 @@ def handle_ams_change(new_trays):
                 log_event("tray_load", tray=f"A{tray_num}", detail=f"Unmatched: {tray_data['type']} #{tray_data['color']}")
 
         current_ams_trays[slot_key] = tray_data
+        _bridge_state_dirty = True
 
 
 def handle_print_finish(finish_data):
@@ -433,8 +527,8 @@ def handle_print_finish(finish_data):
             spool_name = f.get("name", "?")
             material = f.get("material", "?")
             color_hex = f.get("color_hex", "")
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Could not fetch spool #{active_spool_id} for print log: {e}")
 
     if used > 0 and active_spool_id:
         log.info(f"Print {status}, used {used:.1f}g from spool #{active_spool_id}")
@@ -482,8 +576,8 @@ def on_disconnect(client, userdata, rc, properties=None, reason_code=None):
     log.warning(f"Disconnected from MQTT (rc={rc}), reconnecting...")
     try:
         bridge_state_path.write_text(json.dumps({"connected": False, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}))
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Could not write disconnect state: {e}")
 
 
 def on_message(client, userdata, msg):
@@ -503,10 +597,11 @@ def on_message(client, userdata, msg):
         handle_ams_change(ams)
 
     # Parse AMS environment
-    global ams_environment
+    global ams_environment, _bridge_state_dirty
     env = parse_ams_environment(data)
-    if env:
+    if env and env != ams_environment:
         ams_environment = env
+        _bridge_state_dirty = True
 
     # Write shared state for web server
     write_bridge_state()
@@ -528,6 +623,7 @@ def on_message(client, userdata, msg):
 # ============================================================
 
 def main():
+    global mqtt_client
     if not all([PRINTER_IP, PRINTER_SERIAL, PRINTER_ACCESS_CODE]):
         log.error(
             "Missing config. Set PRINTER_IP, PRINTER_SERIAL, PRINTER_ACCESS_CODE\n"
@@ -548,46 +644,50 @@ def main():
         sys.exit(1)
 
     # Set up MQTT client
-    client = mqtt.Client(
+    mqtt_client = mqtt.Client(
         client_id=f"openspool-bridge-{int(time.time())}",
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
     )
-    client.username_pw_set(MQTT_USER, PRINTER_ACCESS_CODE)
+    mqtt_client.username_pw_set(MQTT_USER, PRINTER_ACCESS_CODE)
 
     # TLS without cert verification (printer uses self-signed cert)
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
-    client.tls_set_context(ctx)
+    mqtt_client.tls_set_context(ctx)
 
-    client.on_connect = on_connect
-    client.on_disconnect = on_disconnect
-    client.on_message = on_message
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_disconnect = on_disconnect
+    mqtt_client.on_message = on_message
 
     # Connect and loop
     try:
-        client.connect(PRINTER_IP, MQTT_PORT, keepalive=60)
+        mqtt_client.connect(PRINTER_IP, MQTT_PORT, keepalive=60)
     except Exception as e:
         log.error(f"Cannot connect to printer MQTT: {e}")
         sys.exit(1)
 
     # Run forever, periodically requesting status updates
-    client.loop_start()
+    mqtt_client.loop_start()
 
     try:
+        poll_counter = 0
         while True:
-            time.sleep(POLL_INTERVAL)
-            # Periodic pushall to stay in sync
-            request_topic = f"device/{PRINTER_SERIAL}/request"
-            client.publish(
-                request_topic,
-                json.dumps({"pushing": {"command": "pushall"}}),
-            )
+            process_commands()
+            time.sleep(2)
+            poll_counter += 1
+            if poll_counter >= 15:  # pushall every 30s (15 * 2s)
+                poll_counter = 0
+                request_topic = f"device/{PRINTER_SERIAL}/request"
+                mqtt_client.publish(
+                    request_topic,
+                    json.dumps({"pushing": {"command": "pushall"}}),
+                )
     except KeyboardInterrupt:
         log.info("Shutting down...")
     finally:
-        client.loop_stop()
-        client.disconnect()
+        mqtt_client.loop_stop()
+        mqtt_client.disconnect()
 
 
 if __name__ == "__main__":

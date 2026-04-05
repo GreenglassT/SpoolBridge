@@ -10,3 +10,4 @@ __pycache__/
 Filament Swatches/
 docs/
 bridge_state.json
+bridge_commands.json

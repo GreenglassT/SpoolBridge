@@ -21,44 +21,21 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 import requests as http_requests
 
+from config import (
+    load_env, VALID_TRAYS, TRAY_EXTERNAL, LOCATION_AMS, LOCATION_STORAGE,
+    tray_location, build_openspool_tag, extra_quote, extra_unquote,
+)
+
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-def load_env():
-    env_path = Path(__file__).parent / "bridge.env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, val = line.partition("=")
-                os.environ.setdefault(key.strip(), val.strip().strip('"'))
-
 load_env()
 
 SPOOLMAN_URL = os.environ.get("SPOOLMAN_URL", "http://localhost:7912")
-OPENSPOOLMAN_URL = os.environ.get(
-    "OPENSPOOLMAN_URL", "https://openspoolman.greenglasst.com"
-)
 SCRIPTS_DIR = Path(__file__).parent
+BRIDGE_COMMANDS_PATH = SCRIPTS_DIR / "bridge_commands.json"
 PORT = int(os.environ.get("PORT", 5555))
-
-# Material → OpenSpool type mapping
-MATERIAL_MAP = {
-    "pla": "PLA", "pla basic": "PLA", "pla+": "PLA", "pla matte": "PLA",
-    "pla silk": "PLA", "pla-cf": "PLA-CF", "pla uv": "PLA", "pla wood": "PLA",
-    "petg": "PETG", "petg basic": "PETG", "petg hf": "PETG", "petg-hf": "PETG",
-    "petg-cf": "PETG-CF", "abs": "ABS", "asa": "ASA", "tpu": "TPU",
-    "tpu 90a": "TPU", "pa": "PA", "pa-cf": "PA-CF", "pa6-cf": "PA-CF",
-    "pc": "PC", "pva": "PVA",
-}
-
-DEFAULT_TEMPS = {
-    "PLA": (190, 220), "PLA-CF": (220, 240), "PETG": (230, 260),
-    "PETG-CF": (250, 270), "ABS": (240, 270), "ASA": (240, 270),
-    "TPU": (210, 230), "PA": (270, 300), "PA-CF": (270, 300),
-    "PC": (260, 290), "PVA": (190, 210),
-}
 
 BRANDS = {
     "bambu": {"name": "Bambu Lab", "spool_weight": 251.0, "net_weight": 1000.0},
@@ -72,9 +49,25 @@ BRANDS = {
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
 
+@app.after_request
+def no_cache_html(response):
+    if response.content_type and "text/html" in response.content_type:
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        response.headers.pop("ETag", None)
+        response.headers.pop("Last-Modified", None)
+    return response
+
+
 @app.route("/")
 def index():
     return send_from_directory("static", "index.html")
+
+
+@app.route("/spool/<int:spool_id>")
+def spool_info(spool_id):
+    return send_from_directory("static", "spool.html")
 
 
 # ── Spoolman Proxy ────────────────────────────────────────────
@@ -144,7 +137,7 @@ def create_spool():
     spool_data = {
         "filament_id": filament_id,
         "remaining_weight": brand["net_weight"],
-        "location": data.get("location", "Storage"),
+        "location": data.get("location", LOCATION_STORAGE),
     }
     sr = http_requests.post(f"{SPOOLMAN_URL}/api/v1/spool", json=spool_data)
     return jsonify(sr.json())
@@ -231,19 +224,19 @@ def tray_status():
     r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/spool")
     spools = r.json()
 
-    trays = {"A1": None, "A2": None, "A3": None, "A4": None, "External": None}
+    trays = {t: None for t in VALID_TRAYS}
 
     for s in spools:
         extra = s.get("extra") or {}
         active_tray = extra.get("active_tray")
         if not active_tray:
             continue
-        tray_name = active_tray.strip('"')
+        tray_name = extra_unquote(active_tray)
         if not tray_name:
             continue
 
         # Normalize old-format keys like "22E8AJ5C1000237_0_1" → "A2"
-        if "_" in tray_name and tray_name not in ("A1", "A2", "A3", "A4", "External"):
+        if "_" in tray_name and tray_name not in VALID_TRAYS:
             parts = tray_name.rsplit("_", 1)
             try:
                 tray_name = f"A{int(parts[-1]) + 1}"
@@ -279,6 +272,16 @@ def _read_jsonl(path, limit=None):
 @app.route("/api/activity", methods=["GET"])
 def get_activity():
     return jsonify(_read_jsonl(SCRIPTS_DIR / "activity.json", limit=50))
+
+
+@app.route("/api/activity", methods=["DELETE"])
+def clear_activity():
+    path = SCRIPTS_DIR / "activity.json"
+    try:
+        path.write_text("")
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/prints", methods=["GET"])
@@ -336,6 +339,13 @@ def link_spool():
     if not tag_uid:
         return jsonify({"error": "tag_uid is required"}), 400
 
+    # Check if a spool with this tag already exists
+    existing = http_requests.get(f"{SPOOLMAN_URL}/api/v1/spool").json()
+    for ex in existing:
+        ex_tag = extra_unquote((ex.get("extra") or {}).get("tag", ""))
+        if ex_tag == tag_uid:
+            return jsonify({"spool_id": ex["id"], "linked_tag": tag_uid, "existing": True})
+
     # Find or create filament
     filaments = http_requests.get(f"{SPOOLMAN_URL}/api/v1/filament").json()
     filament_id = None
@@ -362,7 +372,7 @@ def link_spool():
     spool_r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/spool", json={
         "filament_id": filament_id,
         "remaining_weight": 1000,
-        "location": "AMS 2 Pro",
+        "location": LOCATION_AMS,
     })
     spool = spool_r.json()
     spool_id = spool.get("id")
@@ -372,8 +382,8 @@ def link_spool():
 
     http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json={
         "extra": {
-            "tag": f'"{tag_uid}"',
-            "active_tray": f'"{tray}"',
+            "tag": extra_quote(tag_uid),
+            "active_tray": extra_quote(tray),
         },
     })
 
@@ -381,15 +391,19 @@ def link_spool():
 
 
 @app.route("/api/spools/<int:spool_id>/assign-tray", methods=["POST"])
-def assign_tray(spool_id):
-    data = request.json or {}
-    tray = data.get("tray", "")
-    if tray and tray not in ("A1", "A2", "A3", "A4", "External"):
-        return jsonify({"error": "Invalid tray. Use A1-A4, External, or empty to unassign."}), 400
+@app.route("/api/spools/<int:spool_id>/assign-tray/<tray_name>", methods=["POST"])
+def assign_tray(spool_id, tray_name=None):
+    if tray_name is not None:
+        tray = tray_name
+    else:
+        data = request.get_json(silent=True) or {}
+        tray = data.get("tray", "")
+    if tray and tray not in VALID_TRAYS:
+        return jsonify({"error": f"Invalid tray. Use {', '.join(VALID_TRAYS)}, or empty to unassign."}), 400
 
-    location = "AMS 2 Pro" if tray.startswith("A") else "External" if tray == "External" else "Storage"
+    location = tray_location(tray)
     payload = {
-        "extra": {"active_tray": f'"{tray}"' if tray else '""'},
+        "extra": {"active_tray": extra_quote(tray)},
         "location": location,
     }
 
@@ -401,35 +415,37 @@ def assign_tray(spool_id):
         return jsonify({"error": str(e)}), 502
 
 
+@app.route("/api/load-external/<int:spool_id>", methods=["POST"])
+def load_external(spool_id):
+    """Configure printer's external tray with this spool via MQTT."""
+    try:
+        r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json={
+            "extra": {"active_tray": extra_quote(TRAY_EXTERNAL)},
+            "location": LOCATION_EXTERNAL,
+        })
+        r.raise_for_status()
+    except http_requests.exceptions.RequestException:
+        return jsonify({"error": "Spool not found"}), 404
+
+    # Write command for bridge to publish MQTT to the printer
+    cmd = {"command": "load_external", "spool_id": spool_id}
+    try:
+        BRIDGE_COMMANDS_PATH.write_text(json.dumps(cmd))
+    except Exception as e:
+        return jsonify({"error": f"Failed to write command: {e}"}), 500
+
+    return jsonify({"status": "ok", "message": f"Loading spool #{spool_id} to external tray"})
+
+
 # ── NFC Tag Generation ────────────────────────────────────────
 
 @app.route("/api/tag/<int:spool_id>")
 def get_tag(spool_id):
     r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}")
     spool = r.json()
-    f = spool.get("filament", {})
-    vendor = f.get("vendor", {})
-
-    material = (f.get("material") or "PLA").strip()
-    color_hex = (f.get("color_hex") or "000000").lower()
-    brand = vendor.get("name", "Generic")
-    openspool_type = MATERIAL_MAP.get(material.lower(), material.upper())
-
-    temps = DEFAULT_TEMPS.get(openspool_type, (190, 220))
-
-    tag = {
-        "protocol": "openspool",
-        "version": "1.0",
-        "type": openspool_type,
-        "color_hex": color_hex.upper(),
-        "brand": brand,
-        "min_temp": str(temps[0]),
-        "max_temp": str(temps[1]),
-    }
-
-    url = f"{OPENSPOOLMAN_URL}/spool_info?spool_id={spool_id}"
-
-    return jsonify({"tag_json": tag, "openspool_url": url, "spool": spool})
+    tag = build_openspool_tag(spool)
+    spool_url = f"{request.host_url}spool/{spool_id}"
+    return jsonify({"tag_json": tag, "spool_url": spool_url, "spool": spool})
 
 
 # ── Script Runners ────────────────────────────────────────────
@@ -513,7 +529,6 @@ def bridge_action(action):
 def get_config():
     return jsonify({
         "spoolman_url": SPOOLMAN_URL,
-        "openspoolman_url": OPENSPOOLMAN_URL,
         "brands": {k: v["name"] for k, v in BRANDS.items()},
     })
 
@@ -524,6 +539,5 @@ def get_config():
 
 if __name__ == "__main__":
     print(f"\n  SpoolBridge → http://localhost:{PORT}")
-    print(f"  Spoolman API:      {SPOOLMAN_URL}")
-    print(f"  OpenSpoolman:      {OPENSPOOLMAN_URL}\n")
+    print(f"  Spoolman API:      {SPOOLMAN_URL}\n")
     app.run(host="0.0.0.0", port=PORT, debug=False)

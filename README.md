@@ -1,136 +1,180 @@
 # SpoolBridge
 
-Automated filament inventory tracking for the Bambu Lab P2S with AMS 2 Pro,
-combining OpenSpool, Spoolman, and OpenSpoolman into one unified workflow.
+Automated filament inventory tracking for the Bambu Lab P2S with AMS 2 Pro.
+Combines OpenSpool, Spoolman, and a local web dashboard into one unified system
+that automatically tracks which spool is in which tray and how much filament remains.
 
 ---
 
-## System Overview
+## Architecture
 
 ```
-                        ┌──────────────┐
-                        │  NFC Tag on  │
-                        │    Spool     │
-                        └──────┬───────┘
-                               │ tap
-                        ┌──────▼───────┐
-                        │  OpenSpool   │
-                        │  Mini (ESP32)│
-                        └──────┬───────┘
-                               │ MQTT
-                        ┌──────▼───────┐
-                        │   Bambu P2S  │◄──── AMS 2 Pro reads
-                        │   Printer    │      Bambu RFID tags
-                        └──────┬───────┘
-                               │ MQTT
-                        ┌──────▼───────┐
-                        │  bridge.py   │  (runs on Debian server)
-                        └──────┬───────┘
-                               │ REST API
-                        ┌──────▼───────┐
-                        │   Spoolman   │  (inventory database)
-                        └──────┬───────┘
-                               │
-                        ┌──────▼───────┐
-                        │ OpenSpoolman │  (web dashboard)
-                        └──────────────┘
+                    ┌───────────────┐
+                    │  NFC Tag on   │
+                    │    Spool      │
+                    └──────┬────────┘
+                           │ tap
+                    ┌──────▼────────┐
+                    │  OpenSpool    │
+                    │  Mini (ESP32) │
+                    └──────┬────────┘
+                           │ MQTT
+                    ┌──────▼────────┐
+                    │   Bambu P2S   │◄──── AMS 2 Pro reads
+                    │   Printer     │      built-in RFID tags
+                    └──────┬────────┘
+                           │ MQTT (TLS 8883)
+              ┌────────────▼────────────┐
+              │  bridge.py (daemon)     │
+              │  Listens to printer,    │
+              │  syncs state to Spoolman│
+              └────────────┬────────────┘
+                           │ REST API
+              ┌────────────▼────────────┐
+              │  Spoolman (database)    │
+              │  localhost:7912         │
+              └────────────┬────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │  server.py (Flask)      │
+              │  Web dashboard + API    │
+              │  localhost:5555         │
+              └─────────────────────────┘
 ```
 
-### What Each Piece Does
+### Components
 
-| Component | Role | Location |
-|-----------|------|----------|
-| **Spoolman** | Inventory database — spools, weight, usage history | `192.168.50.80:7912` |
-| **OpenSpoolman** | Web dashboard — AMS status, spool info, tray assignment | `openspoolman.greenglasst.com` |
-| **OpenSpool Mini** | NFC reader — tap spool to configure printer | Next to printer |
-| **bridge.py** | Glue — syncs printer state to Spoolman automatically | `192.168.50.80` |
-| **write_tags.py** | Helper — generates NFC tag data from Spoolman inventory | `192.168.50.80` |
-| **sync-ams.sh** | Helper — creates Spoolman records from AMS RFID scans | `192.168.50.80` |
-| **add-spool.py** | Helper — batch-create spools in Spoolman | `192.168.50.80` |
+| Component | Role |
+|-----------|------|
+| **bridge.py** | MQTT daemon — listens to printer events, matches spools by RFID tag or color+material, updates Spoolman tray assignments and remaining weight |
+| **server.py** | Flask web server — serves the dashboard UI and proxies Spoolman API with higher-level operations (link spool, assign tray, CRUD for filaments/vendors/spools) |
+| **static/index.html** | Single-page web dashboard — manage inventory, view AMS status, write NFC tags, track prints |
+| **Spoolman** | External inventory database (spools, filaments, vendors, usage history) |
+| **OpenSpool Mini** | ESP32 NFC reader next to the printer — tap a third-party spool to configure the printer |
 
 ---
 
-## How It All Works
+## What's Automatic vs. Manual
 
-### Scenario 1: Loading a Bambu Spool into the AMS
+### Fully Automatic (bridge.py handles it)
 
-You don't need to do anything. It's fully automatic.
+- **AMS spool detection** — Insert a Bambu spool, the RFID tag is matched to Spoolman and the tray assignment is updated
+- **External spool detection** — Tap a third-party spool on the OpenSpool Mini, the color+material is matched to Spoolman
+- **Tray tracking** — `active_tray` and `location` are updated in Spoolman every time a spool moves
+- **Weight tracking** — When a print finishes, the used filament weight is subtracted from `remaining_weight`
+- **Print history** — Every completed print is logged with spool, material, grams used, and status
+- **Activity feed** — Tray loads, external taps, and print events are logged for the dashboard
+- **Unknown spool alerts** — Unrecognized RFID tags show up on the dashboard with a one-click "Link" button
 
-1. Insert the spool into an AMS tray
-2. The AMS reads the Bambu RFID tag
-3. The printer updates its filament settings via MQTT
-4. `bridge.py` detects the MQTT change
-5. Matches the RFID tag UID to a Spoolman spool (via the `tag` extra field)
-6. Updates the spool's `active_tray` and `location` in Spoolman
-7. OpenSpoolman dashboard reflects the change
+### Manual (you do it once)
 
-**First time only:** If this is a brand-new Bambu spool the system hasn't seen,
-run `sync-ams.sh` on the Debian server to create the Spoolman record and link the
-RFID tag. After that, it's automatic forever.
-
-### Scenario 2: Loading a Third-Party Spool on the External Holder
-
-1. Grab the spool (it has an NFC sticker on it)
-2. Tap it against the OpenSpool Mini reader
-3. The LED turns the filament's color — printer is configured
-4. `bridge.py` detects the external spool change via MQTT
-5. Matches the filament (by color + material) to a Spoolman spool
-6. Updates the spool's `active_tray` to "External" in Spoolman
-7. Load the spool and print
-
-**First time only:** The spool needs to exist in Spoolman first. Use
-`add-spool.py` to create it:
-
-```bash
-./add-spool.py "Inland, PLA, Black, 000000"
-```
-
-Then write an NFC tag for it (see "Writing NFC Tags" below).
-
-### Scenario 3: Print Finishes
-
-1. Print completes (or fails)
-2. Printer reports filament usage over MQTT
-3. `bridge.py` detects the print completion
-4. Subtracts the used weight from the spool's `remaining_weight` in Spoolman
-5. OpenSpoolman shows the updated remaining weight
-
-### Scenario 4: Checking a Spool from the Shelf (Optional)
-
-If your NFC tags have a second URL record (see "Writing NFC Tags"):
-
-1. Tap the spool with your iPhone
-2. Safari opens the spool's OpenSpoolman page
-3. See remaining weight, last used date, color, and material info
-
-This is optional — the automated flow doesn't need it.
+- **First-time Bambu spool** — When a new Bambu spool is inserted that the system hasn't seen, click "Link to Spoolman" on the dashboard. This creates the spool record and links the RFID tag. After that, it's automatic forever.
+- **New third-party spool** — Create it in the Add Spool tab, then write an NFC tag for it (see below).
+- **NFC tag writing** — Use the Write Tags tab to generate the JSON, then write it to an NTAG215 sticker with the NFC Tools iPhone app.
+- **Filament/vendor management** — Add or edit filament definitions and vendors in the Filaments and Vendors tabs.
 
 ---
 
-## Initial Setup
+## Web Dashboard
+
+The dashboard runs at `http://<server-ip>:5555` and has these tabs:
+
+### Dashboard (home)
+- KPI cards: total spools, total filament weight, total value, low stock count
+- AMS 2 Pro tray strip showing what's in each slot (A1–A4) with color swatches
+- AMS environment (humidity, temperature)
+- Unknown spool alerts with "Link to Spoolman" buttons
+- Filament usage chart (bar graph of remaining weight)
+- Recent activity feed
+- Low stock warnings (spools under 200g)
+
+### Spools
+- Filterable, sortable spool inventory with search, brand/material filters
+- Spool cards with color swatch, name, weight progress bar
+- Click to expand: edit weight, location, assign to tray, archive, delete
+- CSV export
+
+### Write Tags
+- Select a spool to generate OpenSpool NFC tag JSON
+- Copy the JSON and Spool Info URL for writing to NTAG215 stickers
+- Filter to show only third-party (non-Bambu) spools
+
+### Add Spool
+- Single spool form: brand, material, color, price
+- Batch add: paste multiple lines in `Brand, Material, Color, Hex, Price` format
+
+### Filaments
+- View, create, edit, delete filament definitions (material, color, vendor, temps)
+
+### Vendors
+- Manage spool vendors (name, empty spool weight)
+
+### Print History
+- Timeline of all completed prints with spool, material, grams used, status
+
+### Tools
+- Bridge service controls (start/stop/restart)
+- Legacy AMS sync (now handled automatically by the bridge)
+
+---
+
+## How the Data Flows
+
+### Loading a Bambu spool into the AMS
+
+1. Insert spool → AMS reads RFID → printer broadcasts MQTT
+2. `bridge.py` receives the MQTT message, extracts `tag_uid` and `tray_uuid`
+3. Searches Spoolman for a spool with a matching tag in `spool.extra.tag`
+4. **Match found:** Updates `active_tray` and `location` in Spoolman, logs the event
+5. **No match:** Adds to `unknown_spools` list → appears as alert on the dashboard
+
+### Tapping a third-party spool on OpenSpool Mini
+
+1. Tap spool → OpenSpool Mini reads NFC → configures printer via MQTT
+2. Printer broadcasts virtual tray change
+3. `bridge.py` receives it, matches by color hex + material type in Spoolman
+4. Updates `active_tray = "External"` in Spoolman
+
+### Print completes
+
+1. Printer broadcasts `gcode_state = "FINISH"` (or `"FAILED"`)
+2. `bridge.py` detects the state transition, extracts grams used
+3. Subtracts used weight from the active spool's `remaining_weight` in Spoolman
+4. Logs to `prints.json` (print history) and `activity.json` (activity feed)
+
+### Linking an unknown spool (one-time)
+
+1. Dashboard shows "Unknown spool detected: PETG #000000 — Link to Spoolman"
+2. Click the button → `POST /api/link-spool`
+3. Server creates a filament (or finds existing match), creates a spool, stores the RFID tag UID in `spool.extra.tag`
+4. Next MQTT report → bridge matches the tag → spool is now tracked automatically
+
+---
+
+## Setup
 
 ### Prerequisites
 
-- Spoolman running (`192.168.50.80:7912`)
-- OpenSpoolman running (`192.168.50.80:8001`)
-- OpenSpool Mini built and connected to WiFi
-- NTAG215 NFC stickers
-- Python 3 with `paho-mqtt` and `requests` on the Debian server
+- Bambu Lab P2S printer on your local network
+- Spoolman running (default: `http://localhost:7912`)
+- Python 3 with venv
+- OpenSpool Mini (for third-party spool NFC reading — optional if you only use Bambu spools in the AMS)
+- NTAG215 NFC stickers (for third-party spools)
 
-### Step 1: Install Dependencies
-
-On the Debian server:
+### 1. Clone and install
 
 ```bash
-pip install paho-mqtt requests
+git clone <repo-url> ~/spoolbridge
+cd ~/spoolbridge
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-### Step 2: Configure the Bridge
-
-Edit `bridge.env` with your printer credentials:
+### 2. Configure
 
 ```bash
-cd ~/Scripts  # or wherever you put these files
+cp bridge.env.example bridge.env
 nano bridge.env
 ```
 
@@ -139,7 +183,6 @@ PRINTER_IP=192.168.x.x
 PRINTER_SERIAL=YOUR_SERIAL_NUMBER
 PRINTER_ACCESS_CODE=YOUR_LAN_ACCESS_CODE
 SPOOLMAN_URL=http://localhost:7912
-OPENSPOOLMAN_URL=https://openspoolman.greenglasst.com
 ```
 
 **Where to find printer credentials:**
@@ -147,225 +190,165 @@ OPENSPOOLMAN_URL=https://openspoolman.greenglasst.com
 - **Serial:** P2S touchscreen → Settings → About
 - **Access Code:** P2S touchscreen → Settings → Network → LAN Access Code
 
-### Step 3: Test the Bridge
+### 3. Test
 
 ```bash
+source venv/bin/activate
+source bridge.env
 python3 bridge.py
 ```
 
 You should see:
-
 ```
-12:00:00 [INFO] === SpoolBridge ===
+12:00:00 [INFO] === SpoolBridge — MQTT Sync Daemon ===
 12:00:00 [INFO] Printer:  192.168.x.x (serial: XXXXX)
 12:00:00 [INFO] Spoolman: http://localhost:7912
-12:00:00 [INFO] Spoolman OK: v0.21.0
+12:00:00 [INFO] Spoolman OK: v0.23.1
 12:00:00 [INFO] Connected to P2S at 192.168.x.x
-12:00:00 [INFO] Subscribed to device/XXXXX/report
 ```
 
-Load a spool into the AMS or tap one on the OpenSpool reader to verify
-it shows up in the logs and updates Spoolman.
+Test the web server in another terminal:
+```bash
+source venv/bin/activate
+source bridge.env
+python3 server.py
+```
 
-### Step 4: Run as a System Service
+Open `http://<server-ip>:5555` in a browser.
 
-Once tested, set it up to run on boot:
+### 4. Install as system services
 
 ```bash
-sudo tee /etc/systemd/system/openspool-bridge.service << 'EOF'
-[Unit]
-Description=SpoolBridge
-After=network.target docker.service
-Wants=docker.service
-
-[Service]
-Type=simple
-User=trent
-WorkingDirectory=/home/trent/Scripts
-ExecStart=/usr/bin/python3 /home/trent/Scripts/bridge.py
-Restart=always
-RestartSec=10
-EnvironmentFile=/home/trent/Scripts/bridge.env
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
+sudo cp openspool-bridge.service /etc/systemd/system/
+sudo cp spoolbridge-web.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable openspool-bridge
-sudo systemctl start openspool-bridge
+sudo systemctl enable --now openspool-bridge spoolbridge-web
 ```
 
 Check status:
-
 ```bash
 sudo systemctl status openspool-bridge
-sudo journalctl -u openspool-bridge -f  # live logs
+sudo systemctl status spoolbridge-web
+sudo journalctl -u openspool-bridge -f   # live bridge logs
 ```
 
 ---
 
-## Writing NFC Tags
+## Writing NFC Tags (Third-Party Spools)
 
-### Generate Tag Data from Spoolman
+Bambu spools have built-in RFID and don't need NFC tags. Third-party spools need an NTAG215 sticker so the OpenSpool Mini can identify them.
 
-On the Debian server (or any machine that can reach Spoolman):
+### From the web dashboard
+
+1. Go to the **Write Tags** tab
+2. Click a spool to see its tag data
+3. Copy the OpenSpool JSON and (optionally) the Spool Info URL
+
+### From the command line
 
 ```bash
-# Show all non-Bambu spools with their NFC tag JSON
-python3 write_tags.py --no-bambu
-
-# Show a specific spool
-python3 write_tags.py 16
-
-# Show everything
-python3 write_tags.py --all
+python3 write_tags.py --no-bambu   # show all non-Bambu spools
+python3 write_tags.py 16           # show a specific spool
 ```
 
-Output looks like:
-
-```
-============================================================
-  Spool #16:  PLA Black
-  Brand: Inland  |  Material: PLA  |  Color: #000000
-  Remaining: 1000g
-============================================================
-
-  OpenSpool NFC Tag JSON (copy into NFC Tools):
-  MIME type: application/json
-
-  {
-    "protocol": "openspool",
-    "version": "1.0",
-    "type": "PLA",
-    "color_hex": "000000",
-    "brand": "Inland",
-    "min_temp": "210",
-    "max_temp": "230"
-  }
-
-  OpenSpoolman URL (optional 2nd NDEF record):
-  https://openspoolman.greenglasst.com/spool_info?spool_id=16
-```
-
-### Write the Tag with NFC Tools (iPhone)
+### Write with NFC Tools (iPhone)
 
 **Record 1 — OpenSpool JSON (required):**
+1. Open NFC Tools → Write → Add a record → Custom
+2. MIME type: `application/json`
+3. Paste the JSON
+4. Tap Write → hold NTAG215 sticker to phone
 
-1. Open **NFC Tools** app
-2. Tap **Write** → **Add a record** → **Custom**
-3. Set MIME type to: `application/json`
-4. Paste the JSON from `write_tags.py`
-5. Tap **Write** → hold NTAG215 sticker to your phone
+**Record 2 — Spool Info URL (optional):**
+1. Add a record → URL
+2. Paste the Spool Info URL
+3. Write to the same tag
 
-**Record 2 — OpenSpoolman URL (optional):**
-
-If you also want to tap the spool with your phone to view its page:
-
-1. Tap **Add a record** → **URL**
-2. Paste the OpenSpoolman URL from `write_tags.py`
-3. Write again to the same tag (NTAG215 has room for both records)
-
-**Stick the tag on the spool.**
-
-### Which Spools Need NFC Tags?
-
-| Spool Type | NFC Tag Needed? | Why |
-|------------|----------------|-----|
-| **Bambu (in AMS)** | No | AMS reads the built-in RFID automatically |
-| **Third-party (external)** | Yes | OpenSpool Mini reads the NFC tag |
-| **Third-party (in AMS)** | Optional | AMS can't read it, but you can manually assign in OpenSpoolman. NFC tag lets you use it externally too |
+Stick the tag on the spool. Done.
 
 ---
 
-## Adding New Spools
+## Helper Scripts
 
-### New Bambu Spool
-
-1. Insert into AMS tray
-2. Run `sync-ams.sh` on the Debian server — it creates the Spoolman record and links the RFID tag
-3. Done — `bridge.py` handles it automatically from now on
-
-### New Third-Party Spool
-
-1. Create it in Spoolman:
-   ```bash
-   ./add-spool.py "Inland, PLA, Red, ff0000, 18.99"
-   ```
-2. Generate the NFC tag data:
-   ```bash
-   ./write_tags.py 17  # use the spool ID from step 1
-   ```
-3. Write the JSON to an NTAG215 sticker using NFC Tools
-4. Stick the tag on the spool
+| Script | Purpose |
+|--------|---------|
+| `add-spool.py` | Batch-create spools: `./add-spool.py "Inland, PLA, Black, 000000, 18.99"` or pass a CSV file |
+| `write_tags.py` | Generate OpenSpool NFC tag JSON from Spoolman inventory |
+| `sync-ams.sh` | Legacy — interactive AMS spool discovery. Now handled by the bridge + dashboard "Link" button |
 
 ---
 
-## Day-to-Day Workflow
+## Runtime Files
 
-### Starting a Print with External Spool
+These are generated at runtime and git-ignored:
 
-1. Grab spool from shelf
-2. Tap on OpenSpool Mini → LED shows filament color, printer is configured
-3. Load spool on external holder
-4. Print
-5. When done, remaining weight is updated automatically
+| File | Purpose |
+|------|---------|
+| `bridge_state.json` | Current printer connection state, AMS environment, unknown spools. Written by bridge.py, read by server.py |
+| `activity.json` | JSON-lines event log (tray loads, external taps, print completions). Capped at 200 entries |
+| `prints.json` | JSON-lines print history (spool ID, material, grams used, status) |
 
-### Starting a Print with AMS Spool
+---
 
-1. Load spool into AMS tray (or it's already there)
-2. Print
-3. Everything is tracked automatically
+## API Endpoints
 
-### Checking Inventory
+All served by `server.py` on port 5555.
 
-- Open `https://openspoolman.greenglasst.com` in any browser
-- See all AMS trays, external spool, remaining weights, last used dates
-- Or tap any NFC-tagged spool with your phone to jump to its page
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/spools` | GET | List all spools from Spoolman |
+| `/api/spools` | POST | Create spool (auto-creates filament and vendor if needed) |
+| `/api/spools/<id>` | PATCH | Update spool (weight, location, archived) |
+| `/api/spools/<id>` | DELETE | Delete spool |
+| `/api/filaments` | GET/POST | List or create filaments |
+| `/api/filaments/<id>` | PATCH/DELETE | Update or delete filament |
+| `/api/vendors` | GET/POST | List or create vendors |
+| `/api/vendors/<id>` | PATCH/DELETE | Update or delete vendor |
+| `/api/tray-status` | GET | Current AMS tray assignments (aggregated from spools) |
+| `/api/printer-status` | GET | Printer connection state from bridge_state.json |
+| `/api/link-spool` | POST | Link unknown RFID tag to a new spool |
+| `/api/spools/<id>/assign-tray` | POST | Manually assign spool to a tray |
+| `/api/tag/<id>` | GET | Generate OpenSpool NFC tag JSON for a spool |
+| `/api/activity` | GET | Recent activity events (last 50) |
+| `/api/prints` | GET | Print history |
+| `/api/bridge-status` | GET | Check if bridge.py service is running |
+| `/api/bridge/<action>` | POST | Start/stop/restart bridge service |
+| `/api/config` | GET | System configuration (Spoolman URL, brands) |
 
 ---
 
 ## Troubleshooting
 
 ### Bridge won't connect to printer
-
 - Verify the printer IP hasn't changed (check touchscreen → Settings → Network)
 - Verify the LAN access code is correct
-- Make sure the printer is on and connected to WiFi
-- The P2S does NOT need Developer Mode enabled
+- The P2S does **not** need Developer Mode enabled
+- Bambu printers allow max 4 concurrent MQTT connections — close Bambu Studio if needed
+
+### Unknown spool keeps appearing
+- Click "Link to Spoolman" on the dashboard to create the spool record
+- Or check that the RFID tag stored in Spoolman matches (`spool.extra.tag`)
 
 ### OpenSpool tap doesn't update Spoolman
-
-- Check `bridge.py` logs for the tap event
-- If it says "No Spoolman spool matches", create the spool first with `add-spool.py`
-- If multiple spools match (same color + material), the bridge logs a warning — consider renaming or archiving duplicate spools
-
-### AMS spool not recognized
-
-- Run `sync-ams.sh` to link the RFID tag to Spoolman
-- Check that OpenSpoolman container is running: `docker ps | grep openspoolman`
+- Check bridge logs: `journalctl -u openspool-bridge -f`
+- If "No Spoolman spool matches", create the spool first in the Add Spool tab
+- If multiple spools match (same color + material), archive or rename duplicates
 
 ### NFC tag not reading on OpenSpool Mini
-
-- Red PN532 reads best at the **corners** of the reader
-- Blue PN532 reads best at the **center**
-- Make sure PN532 DIP switches are set to SPI mode (switch 1 up, switch 2 down)
-- Check wiring and power
-
-### Bridge keeps disconnecting
-
-- Bambu printers allow max 4 concurrent MQTT connections
-- Make sure you don't have too many clients connected (Bambu Studio, OpenSpoolman, bridge, OpenSpool Mini = 4)
-- If needed, close Bambu Studio when not actively slicing
+- Red PN532: reads best at **corners** of the reader
+- Blue PN532: reads best at **center**
+- Verify PN532 DIP switches are set to SPI mode (switch 1 up, switch 2 down)
 
 ---
 
-## File Reference
+## Tech Stack
 
-| File | Purpose | Runs On |
-|------|---------|---------|
-| `bridge.py` | MQTT→Spoolman sync daemon | Debian server (systemd) |
-| `bridge.env` | Bridge configuration (printer credentials) | Debian server |
-| `write_tags.py` | Generate OpenSpool NFC tag JSON from Spoolman | Debian server or Mac |
-| `sync-ams.sh` | Create Spoolman records from AMS RFID scans | Debian server |
-| `add-spool.py` | Batch-create spools in Spoolman | Debian server or Mac |
+| Layer | Technology |
+|-------|-----------|
+| Printer communication | MQTT over TLS (paho-mqtt) |
+| Backend | Flask (Python) |
+| Frontend | Vanilla HTML/CSS/JavaScript (single file, no build step) |
+| Database | Spoolman (external, REST API) |
+| State files | JSON (bridge_state.json, activity.json, prints.json) |
+| Process management | systemd |
+| Runtime | Python 3 venv |

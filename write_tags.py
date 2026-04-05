@@ -22,64 +22,15 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+from config import load_env, build_openspool_tag
+
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-def load_env():
-    env_path = Path(__file__).parent / "bridge.env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, val = line.partition("=")
-                os.environ.setdefault(key.strip(), val.strip().strip('"'))
-
 load_env()
 
 SPOOLMAN_URL = os.environ.get("SPOOLMAN_URL", "http://localhost:7912")
-
-# Material → OpenSpool type mapping
-# Bambu printer expects specific type strings
-MATERIAL_MAP = {
-    "pla": "PLA",
-    "pla basic": "PLA",
-    "pla+": "PLA",
-    "pla matte": "PLA",
-    "pla silk": "PLA",
-    "pla-cf": "PLA-CF",
-    "pla uv": "PLA",
-    "pla wood": "PLA",
-    "petg": "PETG",
-    "petg basic": "PETG",
-    "petg hf": "PETG",
-    "petg-hf": "PETG",
-    "petg-cf": "PETG-CF",
-    "abs": "ABS",
-    "asa": "ASA",
-    "tpu": "TPU",
-    "tpu 90a": "TPU",
-    "pa": "PA",
-    "pa-cf": "PA-CF",
-    "pa6-cf": "PA-CF",
-    "pc": "PC",
-    "pva": "PVA",
-}
-
-# Default temp ranges per material type
-DEFAULT_TEMPS = {
-    "PLA":     (190, 220),
-    "PLA-CF":  (220, 240),
-    "PETG":    (230, 260),
-    "PETG-CF": (250, 270),
-    "ABS":     (240, 270),
-    "ASA":     (240, 270),
-    "TPU":     (210, 230),
-    "PA":      (270, 300),
-    "PA-CF":   (270, 300),
-    "PC":      (260, 290),
-    "PVA":     (190, 210),
-}
 
 
 # ============================================================
@@ -101,48 +52,12 @@ def get_all_spools():
 # TAG GENERATION
 # ============================================================
 
-def spool_to_openspool_json(spool):
-    """Convert a Spoolman spool record to OpenSpool NFC tag JSON."""
-    f = spool.get("filament", {})
-    vendor = f.get("vendor", {})
-
-    material = (f.get("material") or "PLA").strip()
-    color_hex = (f.get("color_hex") or "000000").lower()
-    brand = vendor.get("name", "Generic")
-
-    # Map material to OpenSpool type
-    openspool_type = MATERIAL_MAP.get(material.lower(), material.upper())
-
-    # Get temp range from filament settings or defaults
-    nozzle_min = f.get("settings_extruder_temp")
-    nozzle_max = nozzle_min
-    if not nozzle_min:
-        default = DEFAULT_TEMPS.get(openspool_type, (190, 220))
-        nozzle_min, nozzle_max = default
-    else:
-        # Use +/- 10 if only one temp is set
-        nozzle_min = max(nozzle_min - 10, 150)
-        nozzle_max = nozzle_max + 10
-
-    tag_data = {
-        "protocol": "openspool",
-        "version": "1.0",
-        "type": openspool_type,
-        "color_hex": color_hex.upper(),
-        "brand": brand,
-        "min_temp": str(nozzle_min),
-        "max_temp": str(nozzle_max),
-    }
-
-    return tag_data
-
-
 def print_spool_tag(spool, show_url=True):
     """Print a spool's info and OpenSpool NFC tag JSON."""
     f = spool.get("filament", {})
     vendor = f.get("vendor", {})
     remaining = spool.get("remaining_weight", 0)
-    tag_data = spool_to_openspool_json(spool)
+    tag_data = build_openspool_tag(spool)
 
     name = f.get("name", "Unknown")
     material = f.get("material", "?")
@@ -160,11 +75,9 @@ def print_spool_tag(spool, show_url=True):
     print(f"  {json.dumps(tag_data, indent=2)}")
 
     if show_url:
-        base = os.environ.get(
-            "OPENSPOOLMAN_URL", "https://openspoolman.greenglasst.com"
-        )
-        print(f"\n  OpenSpoolman URL (optional 2nd NDEF record):")
-        print(f"  {base}/spool_info?spool_id={spool['id']}")
+        base = os.environ.get("SPOOLBRIDGE_URL", "http://localhost:5555")
+        print(f"\n  Spool Info URL (optional 2nd NDEF record):")
+        print(f"  {base}/spool/{spool['id']}")
 
     print()
 

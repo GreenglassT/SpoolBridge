@@ -728,7 +728,7 @@ input::placeholder { color: var(--text-dim); }
   cursor: pointer;
 }
 
-/* ── OpenSpoolman Link ────────────────────────────────────── */
+/* ── Spool Detail Link ────────────────────────────────────── */
 .detail-link {
   font-size: 0.78rem;
   color: var(--accent);
@@ -792,7 +792,7 @@ input::placeholder { color: var(--text-dim); }
     <!-- Activity + Low Stock -->
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
       <div>
-        <div class="section-header"><span class="section-title">Recent Activity</span></div>
+        <div class="section-header"><span class="section-title">Recent Activity</span><a href="#" onclick="event.preventDefault();clearActivity()" class="detail-link" style="font-size:0.72rem;margin-left:8px;">Clear</a></div>
         <div class="log-output" id="activity-feed" style="max-height:280px;">No events yet.</div>
       </div>
       <div>
@@ -986,7 +986,7 @@ Bambu, PETG HF, White, ffffff, 22.99"></textarea>
 let spools = [];
 let selectedTagSpool = null;
 let selectedSpoolId = null;
-let openspoolmanUrl = '';
+let spoolBaseUrl = '';
 
 // ═══════════════════════════════════════════════════════════════
 // Init
@@ -1021,12 +1021,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }, 15000);
 
-  // Set Spoolman link + OpenSpoolman URL
+  // Set Spoolman link
   try {
     const cfg = await api('/api/config');
     const link = document.getElementById('open-spoolman');
-    link.href = cfg.spoolman_url || 'http://192.168.50.80:7912';
-    openspoolmanUrl = cfg.openspoolman_url || '';
+    link.href = cfg.spoolman_url || '#';
+    spoolBaseUrl = window.location.origin;
   } catch(e) {}
 });
 
@@ -1035,11 +1035,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 // ═══════════════════════════════════════════════════════════════
 
 async function api(url, opts = {}) {
-  const r = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
+  const method = opts.method || 'GET';
+  const fetchOpts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (opts.body) {
+    fetchOpts.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
+  }
+  const r = await fetch(url, fetchOpts);
   if (!r.ok) {
     const err = await r.json().catch(() => ({}));
     throw new Error(err.error || `HTTP ${r.status}`);
@@ -1073,6 +1074,11 @@ function setupTabs() {
       if (tab.dataset.panel === 'vendors') { loadAndRenderVendors(); }
     });
   });
+}
+
+function switchTab(panel) {
+  const tab = document.querySelector(`.tab[data-panel="${panel}"]`);
+  if (tab) tab.click();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1174,6 +1180,7 @@ function renderTrayStrip(trays) {
           <div class="weight-bar" style="width:100%; margin-top:4px;">
             <div class="weight-bar-fill" style="width:${pct}%; background:${barColor};"></div>
           </div>
+          ${isExternal ? `<div style="margin-top:8px;display:flex;gap:12px;justify-content:center;"><a href="#" onclick="event.preventDefault();unloadExternalTray(${t.spool_id})" class="detail-link" style="font-size:0.72rem;color:var(--red);">Unload</a><a href="#" onclick="event.preventDefault();switchTab('spools')" class="detail-link" style="font-size:0.72rem;">Swap</a></div>` : ''}
         </div>`;
     } else {
       const labelColor = isExternal ? 'color:var(--accent);' : '';
@@ -1183,6 +1190,7 @@ function renderTrayStrip(trays) {
           <div class="tray-label" style="${labelColor}">${slot.label}</div>
           <div class="tray-swatch" style="background:var(--bg-input); border-style:dashed;"></div>
           <div class="tray-meta" style="color:var(--text-dim);">Empty</div>
+          ${isExternal ? '<div style="margin-top:8px;"><a href="#" onclick="event.preventDefault();switchTab(\'spools\')" class="detail-link" style="font-size:0.72rem;">Browse spools to load</a></div>' : ''}
         </div>`;
     }
   }
@@ -1343,7 +1351,7 @@ function spoolCard(s, selectable = false, expandable = false) {
     const location = s.location || '';
     const price = f.price ? `$${f.price.toFixed(2)}` : '—';
     const isArchived = !!s.archived;
-    const openspoolmanLink = openspoolmanUrl ? `${openspoolmanUrl}/spool_info?spool_id=${s.id}` : '';
+    const spoolLink = `${spoolBaseUrl}/spool/${s.id}`;
 
     html += `
     <div class="spool-detail">
@@ -1379,10 +1387,10 @@ function spoolCard(s, selectable = false, expandable = false) {
         <input type="number" id="edit-weight-${s.id}" value="${remaining.toFixed(0)}" style="width:80px;" step="1" min="0">
         <span class="muted">g</span>
         <button class="btn btn-primary btn-sm" onclick="editSpoolWeight(${s.id})">Save</button>
-      </div>${openspoolmanLink ? `
+      </div>
       <div style="margin-bottom:12px;">
-        <a href="${openspoolmanLink}" target="_blank" class="detail-link">View in OpenSpoolman</a>
-      </div>` : ''}
+        <a href="${spoolLink}" target="_blank" class="detail-link">Spool Info Page</a>
+      </div>
       <div class="detail-actions">
         <button class="btn btn-ghost btn-sm" style="color:var(--yellow); border-color:var(--yellow);" onclick="archiveSpool(${s.id}, ${isArchived ? 'false' : 'true'}, '${escHtml(name).replace(/'/g, "\\'")}')">${isArchived ? 'Unarchive' : 'Archive'}</button>
         <button class="btn btn-ghost btn-sm" style="color:var(--red); border-color:var(--red);" onclick="deleteSpool(${s.id}, '${escHtml(name).replace(/'/g, "\\'")}')">Delete Spool</button>
@@ -1479,10 +1487,40 @@ async function editSpoolLocation(id) {
   await patchSpool(id, { location }, `Spool #${id} location updated`);
 }
 
+async function clearActivity() {
+  try {
+    await api('/api/activity', { method: 'DELETE' });
+    toast('Activity cleared', 'success');
+    document.getElementById('activity-feed').innerHTML = 'No events yet.';
+  } catch(e) {
+    toast('Failed to clear activity', 'error');
+  }
+}
+
+async function postTrayAssign(spoolId, tray) {
+  const url = tray
+    ? '/api/spools/' + spoolId + '/assign-tray/' + encodeURIComponent(tray)
+    : '/api/spools/' + spoolId + '/assign-tray';
+  const r = await fetch(url, { method: 'POST' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+async function unloadExternalTray(spoolId) {
+  try {
+    await postTrayAssign(spoolId, '');
+    toast('External spool unloaded', 'success');
+    await loadSpools();
+    renderDashboard();
+  } catch(e) {
+    toast('Failed to unload: ' + e.message, 'error');
+  }
+}
+
 async function assignTray(id) {
   const tray = document.getElementById('assign-tray-' + id).value;
   try {
-    await api('/api/spools/' + id + '/assign-tray', { method: 'POST', body: { tray } });
+    await postTrayAssign(id, tray);
     toast('Spool #' + id + (tray ? ' assigned to ' + tray : ' unassigned'), 'success');
     const idx = spools.findIndex(s => s.id === id);
     if (idx >= 0) {
@@ -1603,10 +1641,10 @@ async function selectTagSpool(id) {
           <div class="tag-json-block" id="tag-json-text">${escHtml(jsonStr)}</div>
           <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="copyTag()">Copy JSON</button>
           <div style="margin-top:20px;">
-            <span class="form-label">OpenSpoolman URL</span>
+            <span class="form-label">Spool Info URL</span>
             <span class="dim" style="font-size:0.72rem; margin-left:8px;">Optional 2nd NDEF record</span>
           </div>
-          <div class="tag-url" id="tag-url-text">${escHtml(data.openspool_url)}</div>
+          <div class="tag-url" id="tag-url-text">${escHtml(data.spool_url)}</div>
           <button class="btn btn-ghost btn-sm" style="margin-top:10px;" onclick="copyUrl()">Copy URL</button>
         </div>
       `;
