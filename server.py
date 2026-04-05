@@ -175,6 +175,20 @@ def tray_status():
         if not active_tray:
             continue
         tray_name = active_tray.strip('"')
+        if not tray_name:
+            continue
+
+        # Normalize old-format keys like "22E8AJ5C1000237_0_1" → "A2"
+        if "_" in tray_name and tray_name not in ("A1", "A2", "A3", "A4", "External"):
+            parts = tray_name.rsplit("_", 1)
+            try:
+                tray_name = f"A{int(parts[-1]) + 1}"
+            except (ValueError, IndexError):
+                continue
+
+        if tray_name not in trays:
+            continue
+
         fil = s.get("filament") or {}
         vendor = fil.get("vendor") or {}
         trays[tray_name] = {
