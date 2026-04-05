@@ -488,6 +488,75 @@ input::placeholder { color: var(--text-dim); }
   display: inline-block;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── AMS Tray Slots ────────────────────────────────────────── */
+.tray-slot {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 12px;
+  text-align: center;
+  min-height: 90px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s;
+}
+.tray-slot.occupied { border: 1px solid var(--border); }
+.tray-slot.empty-tray { border: 1px dashed var(--border); }
+.tray-slot .tray-swatch {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 2px solid var(--border); margin-bottom: 6px;
+}
+.tray-slot .tray-name { font-size: 0.8rem; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; }
+.tray-slot .tray-meta { font-size: 0.72rem; color: var(--text-muted); }
+.tray-slot .tray-weight { font-family: var(--mono); font-size: 0.72rem; color: var(--accent); margin-top: 2px; }
+
+.external-slot {
+  background: var(--bg-panel); border: 1px solid var(--accent); border-radius: var(--radius);
+  padding: 12px; text-align: center; min-height: 90px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+
+/* ── Print History Entries ──────────────────────────────────── */
+.print-entry {
+  display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: 6px;
+}
+.print-entry .print-swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--border); flex-shrink: 0; }
+.print-entry .print-info { flex: 1; min-width: 0; }
+.print-entry .print-name { font-weight: 500; font-size: 0.85rem; }
+.print-entry .print-meta { font-size: 0.75rem; color: var(--text-muted); }
+.print-entry .print-grams { font-family: var(--mono); font-size: 0.85rem; font-weight: 500; color: var(--accent); white-space: nowrap; }
+.print-entry .print-status-failed { color: var(--red); }
+
+/* ── Spool Detail Panel ────────────────────────────────────── */
+.spool-detail {
+  background: var(--bg-panel); border: 1px solid var(--accent);
+  border-radius: var(--radius); padding: 20px; margin-top: 12px; margin-bottom: 12px;
+}
+.spool-detail .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+.spool-detail .detail-item .form-label { margin-bottom: 2px; }
+.spool-detail .detail-value { font-size: 0.85rem; color: var(--text); }
+.spool-detail .detail-actions { display: flex; gap: 8px; margin-top: 12px; }
+
+/* ── Low Stock Cards ───────────────────────────────────────── */
+.low-stock-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; background: var(--bg-panel); border-radius: var(--radius); margin-bottom: 6px;
+}
+.low-stock-card.critical { border: 1px solid var(--red); border-left: 3px solid var(--red); }
+.low-stock-card.warning { border: 1px solid var(--yellow); border-left: 3px solid var(--yellow); }
+.low-stock-card .low-stock-swatch { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border); flex-shrink: 0; }
+.low-stock-card .low-stock-name { font-size: 0.82rem; color: var(--text); }
+.low-stock-card .low-stock-weight { font-family: var(--mono); font-size: 0.78rem; margin-left: auto; white-space: nowrap; }
+.low-stock-card.critical .low-stock-weight { color: var(--red); }
+.low-stock-card.warning .low-stock-weight { color: var(--yellow); }
+
+@media (max-width: 768px) {
+  #panel-dashboard > div:last-child { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
@@ -509,17 +578,34 @@ input::placeholder { color: var(--text-dim); }
     <button class="tab" data-panel="spools" role="tab">Spools</button>
     <button class="tab" data-panel="tags" role="tab">Write Tags</button>
     <button class="tab" data-panel="add" role="tab">Add Spool</button>
+    <button class="tab" data-panel="history" role="tab">Print History</button>
     <button class="tab" data-panel="tools" role="tab">Tools</button>
   </nav>
 
   <!-- ═══ Dashboard ═══ -->
   <div class="panel active" id="panel-dashboard">
-    <div class="kpi-row" id="kpis"></div>
-
-    <div class="section-header">
-      <span class="section-title">Spool Inventory</span>
+    <!-- AMS Tray View -->
+    <div style="display:flex; gap:16px; margin-bottom:24px; align-items:flex-start; flex-wrap:wrap;">
+      <div>
+        <div class="section-title" style="margin-bottom:8px;">AMS 2 Pro</div>
+        <div id="ams-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:6px; background:var(--bg-panel); border:1px solid var(--border); border-radius:var(--radius); padding:10px; width:280px;"></div>
+      </div>
+      <div>
+        <div class="section-title" style="margin-bottom:8px; color:var(--accent);">External</div>
+        <div id="external-slot" style="width:130px;"></div>
+      </div>
     </div>
-    <div id="dashboard-spools" class="spool-grid"></div>
+    <!-- Activity + Low Stock -->
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+      <div>
+        <div class="section-header"><span class="section-title">Recent Activity</span></div>
+        <div class="log-output" id="activity-feed" style="max-height:280px;">No events yet.</div>
+      </div>
+      <div>
+        <div class="section-header"><span class="section-title" id="low-stock-title">Low Stock</span></div>
+        <div id="low-stock-list"></div>
+      </div>
+    </div>
   </div>
 
   <!-- ═══ Spools ═══ -->
@@ -614,6 +700,13 @@ input::placeholder { color: var(--text-dim); }
     </div>
   </div>
 
+  <!-- ═══ Print History ═══ -->
+  <div class="panel" id="panel-history">
+    <div class="section-header"><span class="section-title">Print History</span></div>
+    <div id="print-history-list"></div>
+    <div class="empty" id="print-history-empty">No prints recorded yet. History appears after prints complete.</div>
+  </div>
+
   <!-- ═══ Tools ═══ -->
   <div class="panel" id="panel-tools">
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 800px;">
@@ -652,6 +745,7 @@ input::placeholder { color: var(--text-dim); }
 
 let spools = [];
 let selectedTagSpool = null;
+let selectedSpoolId = null;
 
 // ═══════════════════════════════════════════════════════════════
 // Init
@@ -667,6 +761,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderSpools();
   renderTagSpools();
   checkBridge();
+
+  // Auto-refresh dashboard every 5 seconds
+  setInterval(async () => {
+    if (document.querySelector('#panel-dashboard.active')) {
+      await loadSpools();
+      renderDashboard();
+    }
+  }, 5000);
 
   // Set Spoolman link
   try {
@@ -710,6 +812,7 @@ function setupTabs() {
       document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
       tab.classList.add('active');
       document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
+      if (tab.dataset.panel === 'history') { renderPrintHistory(); }
     });
   });
 }
@@ -719,48 +822,135 @@ function setupTabs() {
 // ═══════════════════════════════════════════════════════════════
 
 function renderDashboard() {
-  const totalSpools = spools.length;
-  const totalWeight = spools.reduce((a, s) => a + (s.remaining_weight || 0), 0);
-  const brands = new Set(spools.map(s => (s.filament?.vendor?.name || 'Unknown')));
-  const materials = new Set(spools.map(s => (s.filament?.material || '?')));
+  fetchTrayStatus();
+  fetchActivity();
+  renderLowStock();
+}
 
-  document.getElementById('kpis').innerHTML = `
-    <div class="kpi">
-      <div class="kpi-label">Total Spools</div>
-      <div class="kpi-value accent">${totalSpools}</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Total Filament</div>
-      <div class="kpi-value">${(totalWeight / 1000).toFixed(1)}<span class="muted" style="font-size:0.9rem;">kg</span></div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Brands</div>
-      <div class="kpi-value">${brands.size}</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Materials</div>
-      <div class="kpi-value">${materials.size}</div>
-    </div>
-  `;
-
-  // Show low-weight spools
-  const lowSpools = spools.filter(s => (s.remaining_weight || 0) < 200 && s.remaining_weight > 0);
-  const el = document.getElementById('dashboard-spools');
-
-  if (lowSpools.length > 0) {
-    document.querySelector('#panel-dashboard .section-title').textContent = `Low Stock (${lowSpools.length})`;
-    el.innerHTML = lowSpools.map(s => spoolCard(s)).join('');
-  } else {
-    document.querySelector('#panel-dashboard .section-title').textContent = 'All Spools';
-    el.innerHTML = spools.map(s => spoolCard(s)).join('');
+async function fetchTrayStatus() {
+  try {
+    const trays = await api('/api/tray-status');
+    renderAmsGrid(trays);
+    renderExternalSlot(trays);
+  } catch(e) {
+    console.error('Failed to fetch tray status', e);
   }
+}
+
+function renderAmsGrid(trays) {
+  const grid = document.getElementById('ams-grid');
+  let html = '';
+  for (let i = 1; i <= 4; i++) {
+    const key = 'A' + i;
+    const t = trays[key];
+    if (t) {
+      const pct = Math.round((t.remaining_weight / t.total_weight) * 100);
+      const barColor = pct > 30 ? 'var(--green)' : pct > 10 ? 'var(--yellow)' : 'var(--red)';
+      html += `
+        <div class="tray-slot occupied">
+          <div class="tray-swatch" style="background:#${t.color_hex};"></div>
+          <div class="tray-name">${escHtml(t.name)}</div>
+          <div class="tray-meta">${escHtml(t.brand)}</div>
+          <div class="tray-weight">${t.remaining_weight.toFixed(0)}g</div>
+          <div class="weight-bar" style="width:100%; margin-top:4px;">
+            <div class="weight-bar-fill" style="width:${pct}%; background:${barColor};"></div>
+          </div>
+        </div>`;
+    } else {
+      html += `
+        <div class="tray-slot empty-tray">
+          <div class="tray-swatch" style="background:var(--bg-input); border-style:dashed;"></div>
+          <div class="tray-meta" style="color:var(--text-dim);">Empty</div>
+          <div class="tray-meta" style="color:var(--text-dim);">Tray ${i}</div>
+        </div>`;
+    }
+  }
+  grid.innerHTML = html;
+}
+
+function renderExternalSlot(trays) {
+  const el = document.getElementById('external-slot');
+  const t = trays['External'];
+  if (t) {
+    const pct = Math.round((t.remaining_weight / t.total_weight) * 100);
+    const barColor = pct > 30 ? 'var(--green)' : pct > 10 ? 'var(--yellow)' : 'var(--red)';
+    el.innerHTML = `
+      <div class="external-slot">
+        <div class="tray-swatch" style="background:#${t.color_hex}; border:2px solid var(--border);"></div>
+        <div class="tray-name">${escHtml(t.name)}</div>
+        <div class="tray-meta">${escHtml(t.brand)}</div>
+        <div class="tray-weight">${t.remaining_weight.toFixed(0)}g</div>
+        <div class="weight-bar" style="width:100%; margin-top:4px;">
+          <div class="weight-bar-fill" style="width:${pct}%; background:${barColor};"></div>
+        </div>
+      </div>`;
+  } else {
+    el.innerHTML = `
+      <div class="external-slot" style="border-style:dashed;">
+        <div class="tray-swatch" style="background:var(--bg-input); border-style:dashed;"></div>
+        <div class="tray-meta" style="color:var(--text-dim);">No spool</div>
+      </div>`;
+  }
+}
+
+async function fetchActivity() {
+  try {
+    const events = await api('/api/activity');
+    const el = document.getElementById('activity-feed');
+    if (events.length === 0) {
+      el.textContent = 'No events yet.';
+      return;
+    }
+    const dotColors = {
+      print_finish: 'var(--green)', print_failed: 'var(--red)',
+      print_done: 'var(--green)',
+      tray_load: 'var(--blue)', external_tap: 'var(--accent)',
+    };
+    el.innerHTML = events.slice(0, 20).map(e => {
+      const dot = dotColors[e.type] || 'var(--text-dim)';
+      const time = (e.ts || '').split('T')[1] || '';
+      const name = e.spool_name || '';
+      const detail = e.detail || '';
+      return `<div><span style="color:var(--text-dim);">${escHtml(time)}</span> <span style="color:${dot};">●</span> ${escHtml(name)} ${escHtml(detail)}</div>`;
+    }).join('');
+  } catch(e) {
+    console.error('Failed to fetch activity', e);
+  }
+}
+
+function renderLowStock() {
+  const low = spools.filter(s => {
+    const w = s.remaining_weight || 0;
+    return w > 0 && w < 200;
+  });
+  const el = document.getElementById('low-stock-list');
+  const title = document.getElementById('low-stock-title');
+
+  if (low.length === 0) {
+    title.textContent = 'Low Stock';
+    el.innerHTML = '<div class="empty" style="padding:20px;">All stocked up.</div>';
+    return;
+  }
+
+  title.textContent = `Low Stock (${low.length})`;
+  el.innerHTML = low.map(s => {
+    const f = s.filament || {};
+    const w = s.remaining_weight || 0;
+    const cls = w < 100 ? 'critical' : 'warning';
+    return `
+      <div class="low-stock-card ${cls}">
+        <div class="low-stock-swatch" style="background:#${f.color_hex || '333'};"></div>
+        <div class="low-stock-name">${escHtml(f.name || 'Unknown')}</div>
+        <div class="low-stock-weight">${w.toFixed(0)}g</div>
+      </div>`;
+  }).join('');
 }
 
 // ═══════════════════════════════════════════════════════════════
 // Spool Rendering
 // ═══════════════════════════════════════════════════════════════
 
-function spoolCard(s, selectable = false) {
+function spoolCard(s, selectable = false, expandable = false) {
   const f = s.filament || {};
   const color = f.color_hex || '333';
   const name = f.name || 'Unknown';
@@ -771,16 +961,17 @@ function spoolCard(s, selectable = false) {
   const pct = Math.round((remaining / total) * 100);
   const barColor = pct > 30 ? 'var(--green)' : pct > 10 ? 'var(--yellow)' : 'var(--red)';
   const selected = selectable && selectedTagSpool === s.id ? ' selected' : '';
-  const onclick = selectable ? ` onclick="selectTagSpool(${s.id})"` : '';
+  const onclick = selectable ? ` onclick="selectTagSpool(${s.id})"` :
+                  expandable ? ` onclick="toggleSpoolDetail(${s.id})"` : '';
 
-  return `
+  let html = `
     <div class="spool-card${selected}"${onclick}>
       <div class="spool-swatch" style="background:#${color};"></div>
       <div class="spool-info">
-        <div class="spool-name">${name}</div>
+        <div class="spool-name">${escHtml(name)}</div>
         <div class="spool-meta">
-          <span>${brand}</span>
-          <span>${material}</span>
+          <span>${escHtml(brand)}</span>
+          <span>${escHtml(material)}</span>
           <span class="spool-id">#${s.id}</span>
         </div>
         <div style="display:flex; align-items:center; justify-content:space-between; margin-top:4px;">
@@ -791,8 +982,40 @@ function spoolCard(s, selectable = false) {
           <div class="weight-bar-fill" style="width:${pct}%; background:${barColor};"></div>
         </div>
       </div>
-    </div>
-  `;
+    </div>`;
+
+  if (expandable && selectedSpoolId === s.id) {
+    const extra = s.extra || {};
+    const activeTray = (extra.active_tray || '').replace(/"/g, '') || 'None';
+    const tag = (extra.tag || '').replace(/"/g, '') || 'None';
+    const location = s.location || 'Unknown';
+    const price = f.price ? `$${f.price.toFixed(2)}` : '—';
+
+    html += `
+    <div class="spool-detail">
+      <div class="detail-grid">
+        <div class="detail-item"><div class="form-label">Location</div><div class="detail-value">${escHtml(location)}</div></div>
+        <div class="detail-item"><div class="form-label">Active Tray</div><div class="detail-value">${escHtml(activeTray)}</div></div>
+        <div class="detail-item"><div class="form-label">Material</div><div class="detail-value">${escHtml(material)}</div></div>
+        <div class="detail-item"><div class="form-label">Color</div><div class="detail-value">#${escHtml(color)}</div></div>
+        <div class="detail-item"><div class="form-label">Brand</div><div class="detail-value">${escHtml(brand)}</div></div>
+        <div class="detail-item"><div class="form-label">Price</div><div class="detail-value">${price}</div></div>
+        <div class="detail-item"><div class="form-label">RFID Tag</div><div class="detail-value mono" style="font-size:0.72rem;">${escHtml(tag)}</div></div>
+        <div class="detail-item"><div class="form-label">Remaining / Total</div><div class="detail-value mono">${remaining.toFixed(0)}g / ${total.toFixed(0)}g</div></div>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
+        <label class="form-label" style="margin:0;">Update Weight:</label>
+        <input type="number" id="edit-weight-${s.id}" value="${remaining.toFixed(0)}" style="width:80px;" step="1" min="0">
+        <span class="muted">g</span>
+        <button class="btn btn-primary btn-sm" onclick="editSpoolWeight(${s.id})">Save</button>
+      </div>
+      <div class="detail-actions">
+        <button class="btn btn-ghost btn-sm" style="color:var(--red); border-color:var(--red);" onclick="deleteSpool(${s.id}, '${escHtml(name).replace(/'/g, "\\'")}')">Delete Spool</button>
+      </div>
+    </div>`;
+  }
+
+  return html;
 }
 
 function renderSpools() {
@@ -823,8 +1046,39 @@ function renderSpools() {
   });
 
   document.getElementById('spools-list').innerHTML = filtered.length
-    ? filtered.map(s => spoolCard(s)).join('')
+    ? filtered.map(s => spoolCard(s, false, true)).join('')
     : '<div class="empty">No spools match your filters.</div>';
+}
+
+function toggleSpoolDetail(id) {
+  selectedSpoolId = selectedSpoolId === id ? null : id;
+  renderSpools();
+}
+
+async function editSpoolWeight(id) {
+  const input = document.getElementById(`edit-weight-${id}`);
+  const weight = parseFloat(input.value);
+  if (isNaN(weight) || weight < 0) { toast('Invalid weight', 'error'); return; }
+  try {
+    await api(`/api/spools/${id}`, { method: 'PATCH', body: { remaining_weight: weight } });
+    toast(`Spool #${id} updated to ${weight}g`, 'success');
+    await loadSpools();
+    renderSpools();
+    renderDashboard();
+  } catch(e) { toast('Failed to update spool', 'error'); }
+}
+
+async function deleteSpool(id, name) {
+  if (!confirm(`Delete "${name}" (spool #${id})? This cannot be undone.`)) return;
+  try {
+    await api(`/api/spools/${id}`, { method: 'DELETE' });
+    toast(`Spool #${id} deleted`, 'success');
+    selectedSpoolId = null;
+    await loadSpools();
+    renderSpools();
+    renderDashboard();
+    renderTagSpools();
+  } catch(e) { toast('Failed to delete spool', 'error'); }
 }
 
 // Attach filter listeners
@@ -1015,6 +1269,30 @@ async function checkBridge() {
 
 function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function renderPrintHistory() {
+  try {
+    const prints = await api('/api/prints');
+    const list = document.getElementById('print-history-list');
+    const empty = document.getElementById('print-history-empty');
+    if (prints.length === 0) { list.innerHTML = ''; empty.style.display = 'block'; return; }
+    empty.style.display = 'none';
+    list.innerHTML = prints.map(p => {
+      const date = (p.ts || '').replace('T', ' ');
+      const statusClass = p.status === 'failed' ? ' print-status-failed' : '';
+      const statusLabel = p.status === 'failed' ? ' (FAILED)' : '';
+      return `
+        <div class="print-entry">
+          <div class="print-swatch" style="background:#${p.color_hex || '333'};"></div>
+          <div class="print-info">
+            <div class="print-name${statusClass}">${escHtml(p.spool_name || 'Unknown')}${statusLabel}</div>
+            <div class="print-meta">${escHtml(p.material || '?')} · ${escHtml(date)}</div>
+          </div>
+          <div class="print-grams${statusClass}">-${p.grams_used.toFixed(1)}g</div>
+        </div>`;
+    }).join('');
+  } catch(e) { console.error('Failed to load print history', e); }
 }
 
 function toast(msg, type = 'success') {
