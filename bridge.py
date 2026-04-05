@@ -169,6 +169,56 @@ def update_spool_weight(spool_id, used_grams):
 
 
 # ============================================================
+# EVENT LOGGING
+# ============================================================
+
+SCRIPT_DIR = Path(__file__).parent
+
+
+def log_event(event_type, tray="", spool_id=None, spool_name="", detail=""):
+    """Append an event to activity.json (JSON-lines, capped at 200 entries)."""
+    try:
+        path = SCRIPT_DIR / "activity.json"
+        entry = json.dumps({
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "type": event_type,
+            "tray": tray,
+            "spool_id": spool_id,
+            "spool_name": spool_name,
+            "detail": detail,
+        })
+        # Read existing lines, append new, cap at 200
+        lines = []
+        if path.exists():
+            lines = path.read_text().strip().splitlines()
+        lines.append(entry)
+        if len(lines) > 200:
+            lines = lines[-200:]
+        path.write_text("\n".join(lines) + "\n")
+    except Exception as e:
+        log.error(f"Failed to write activity.json: {e}")
+
+
+def log_print(spool_id, spool_name, material, color_hex, grams_used, status):
+    """Append a print record to prints.json (JSON-lines, append-only)."""
+    try:
+        path = SCRIPT_DIR / "prints.json"
+        entry = json.dumps({
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "spool_id": spool_id,
+            "spool_name": spool_name,
+            "material": material,
+            "color_hex": color_hex,
+            "grams_used": grams_used,
+            "status": status,
+        })
+        with open(path, "a") as f:
+            f.write(entry + "\n")
+    except Exception as e:
+        log.error(f"Failed to write prints.json: {e}")
+
+
+# ============================================================
 # MQTT MESSAGE PARSING
 # ============================================================
 
@@ -227,10 +277,11 @@ def parse_print_finish(msg_data):
     # Try to get filament usage from the print stats
     # Bambu reports total filament used in the print job
     total_used = mc_print.get("total_weight", 0)  # grams
+    status = gcode_state.lower()  # "finish" or "failed"
     if total_used and total_used > 0:
-        return {"used_grams": total_used}
+        return {"used_grams": total_used, "status": status}
 
-    return None
+    return {"used_grams": 0, "status": status}
 
 
 # ============================================================
@@ -263,12 +314,14 @@ def handle_vt_tray_change(new_vt):
             f"{f.get('name', '?')} ({f.get('material', '?')})"
         )
         update_spool_tray(spool["id"], "External")
+        log_event("external_tap", tray="External", spool_id=spool["id"], spool_name=f.get("name", "?"), detail=f"{f.get('material', '?')} #{new_vt['color']}")
     else:
         active_spool_id = None
         log.warning(
             f"No Spoolman spool matches {new_vt['type']} #{new_vt['color']}. "
             f"Create it in Spoolman first."
         )
+        log_event("external_tap", tray="External", detail=f"Unmatched: {new_vt['type']} #{new_vt['color']}")
 
 
 def handle_ams_change(new_trays):
@@ -292,6 +345,7 @@ def handle_ams_change(new_trays):
                     f"(spool #{spool['id']}, tag {tag_uid[:8]}...)"
                 )
                 update_spool_tray(spool["id"], f"A{tray_num}")
+                log_event("tray_load", tray=f"A{tray_num}", spool_id=spool["id"], spool_name=f.get("name", "?"), detail=f"tag {tag_uid[:8]}...")
             else:
                 log.info(
                     f"AMS Tray {tray_num}: Unknown tag {tag_uid[:8]}... "
@@ -307,25 +361,54 @@ def handle_ams_change(new_trays):
                     f"{f.get('name', '?')} (spool #{spool['id']})"
                 )
                 update_spool_tray(spool["id"], f"A{tray_num}")
+                log_event("tray_load", tray=f"A{tray_num}", spool_id=spool["id"], spool_name=f.get("name", "?"), detail="color match")
 
     current_ams_trays = new_trays
 
 
 def handle_print_finish(finish_data):
-    """Handle print completion — update filament weight."""
+    """Handle print completion — update filament weight and log events."""
     global active_spool_id
 
     used = finish_data.get("used_grams", 0)
-    if used <= 0:
-        return
+    status = finish_data.get("status", "finish")
 
-    # TODO: Determine which spool(s) were used. For single-material prints
-    # using the external spool, we can use active_spool_id.
+    # Get spool info before updating weight
+    spool_name = ""
+    material = ""
+    color_hex = ""
     if active_spool_id:
-        log.info(f"Print finished, used {used:.1f}g from spool #{active_spool_id}")
+        try:
+            spool = sm_get(f"spool/{active_spool_id}")
+            f = spool.get("filament", {})
+            spool_name = f.get("name", "?")
+            material = f.get("material", "?")
+            color_hex = f.get("color_hex", "")
+        except Exception:
+            pass
+
+    if used > 0 and active_spool_id:
+        log.info(f"Print {status}, used {used:.1f}g from spool #{active_spool_id}")
         update_spool_weight(active_spool_id, used)
+    elif used > 0:
+        log.info(f"Print {status}, used {used:.1f}g but no active spool tracked")
     else:
-        log.info(f"Print finished, used {used:.1f}g but no active spool tracked")
+        log.info(f"Print {status}, no filament usage reported")
+
+    log_event(
+        "print_done",
+        spool_id=active_spool_id,
+        spool_name=spool_name,
+        detail=f"{status}, {used:.1f}g used",
+    )
+    log_print(
+        spool_id=active_spool_id,
+        spool_name=spool_name,
+        material=material,
+        color_hex=color_hex,
+        grams_used=used,
+        status=status,
+    )
 
 
 # ============================================================
