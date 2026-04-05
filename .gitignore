@@ -1,4 +1,9 @@
 .superpowers/
 venv/
-*.json
-!requirements.txt
+activity.json
+prints.json
+bridge.env
+*.pyc
+__pycache__/
+.playwright-mcp/
+*.png
