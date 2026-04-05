@@ -1,0 +1,15 @@
+[Unit]
+Description=SpoolBridge Web UI
+After=network.target
+
+[Service]
+Type=simple
+User=trent
+WorkingDirectory=/home/trent/spoolbridge
+ExecStart=/home/trent/spoolbridge/venv/bin/python3 /home/trent/spoolbridge/server.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/home/trent/spoolbridge/bridge.env
+
+[Install]
+WantedBy=multi-user.target

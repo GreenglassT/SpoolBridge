@@ -1,0 +1,1029 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="SpoolBridge">
+<title>SpoolBridge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Fira+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ── Reset & Variables ──────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-base:     #0f1117;
+  --bg-panel:    #1a1d27;
+  --bg-card:     #22252f;
+  --bg-input:    #2a2d3a;
+  --bg-hover:    #2f3342;
+  --border:      #333848;
+  --border-light:#3d4255;
+  --text:        #e2e4ea;
+  --text-muted:  #7c8298;
+  --text-dim:    #505672;
+  --accent:      #f97316;
+  --accent-hover:#fb923c;
+  --accent-dim:  rgba(249, 115, 22, 0.12);
+  --green:       #22c55e;
+  --green-dim:   rgba(34, 197, 94, 0.12);
+  --red:         #ef4444;
+  --red-dim:     rgba(239, 68, 68, 0.12);
+  --yellow:      #eab308;
+  --yellow-dim:  rgba(234, 179, 8, 0.12);
+  --blue:        #3b82f6;
+  --radius:      6px;
+  --mono:        'Fira Code', monospace;
+  --sans:        'Fira Sans', -apple-system, sans-serif;
+}
+
+html { font-size: 15px; }
+body {
+  background: var(--bg-base);
+  color: var(--text);
+  font-family: var(--sans);
+  line-height: 1.5;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Utility ────────────────────────────────────────────────── */
+.mono   { font-family: var(--mono); }
+.muted  { color: var(--text-muted); }
+.dim    { color: var(--text-dim); }
+.accent { color: var(--accent); }
+.green  { color: var(--green); }
+.red    { color: var(--red); }
+
+/* ── Layout ─────────────────────────────────────────────────── */
+.shell {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 24px 60px;
+}
+
+/* ── Header ─────────────────────────────────────────────────── */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 28px;
+}
+header h1 {
+  font-family: var(--mono);
+  font-size: 1.2rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+header h1 span { color: var(--accent); }
+
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 0.8rem;
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+.status-dot.on  { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.status-dot.off { background: var(--red); }
+.status-dot.unknown { background: var(--text-dim); }
+
+/* ── Navigation Tabs ────────────────────────────────────────── */
+.tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.tab {
+  padding: 10px 20px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+  white-space: nowrap;
+  background: none;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  font-family: var(--sans);
+}
+.tab:hover { color: var(--text); background: var(--bg-hover); }
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ── Panels ─────────────────────────────────────────────────── */
+.panel {
+  display: none;
+}
+.panel.active { display: block; }
+
+/* ── Cards ──────────────────────────────────────────────────── */
+.card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+/* ── KPI Row ────────────────────────────────────────────────── */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.kpi {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+}
+.kpi-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.kpi-value {
+  font-family: var(--mono);
+  font-size: 1.8rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* ── Spool List ─────────────────────────────────────────────── */
+.spool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.spool-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.spool-card:hover {
+  border-color: var(--border-light);
+  background: var(--bg-card);
+}
+.spool-card.selected {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.spool-swatch {
+  width: 42px;
+  height: 42px;
+  border-radius: 4px;
+  border: 2px solid var(--border);
+  flex-shrink: 0;
+}
+.spool-info { flex: 1; min-width: 0; }
+.spool-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.spool-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.spool-weight {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--accent);
+  font-weight: 500;
+}
+.spool-id {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+/* ── Weight Bar ─────────────────────────────────────────────── */
+.weight-bar {
+  height: 3px;
+  background: var(--bg-input);
+  border-radius: 2px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+.weight-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+/* ── Filter Bar ─────────────────────────────────────────────── */
+.filter-bar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+input[type="text"], input[type="number"], select {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  font-family: var(--sans);
+  outline: none;
+  transition: border-color 0.15s;
+}
+input:focus, select:focus { border-color: var(--accent); }
+input::placeholder { color: var(--text-dim); }
+
+/* ── Buttons ────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  font-weight: 500;
+  font-family: var(--sans);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.btn-primary:hover { background: var(--accent-hover); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+.btn-ghost:hover { color: var(--text); border-color: var(--border-light); background: var(--bg-hover); }
+
+.btn-sm { padding: 5px 12px; font-size: 0.78rem; }
+
+.btn-icon {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-icon:hover { color: var(--text); border-color: var(--border-light); }
+
+/* ── Tag Panel ──────────────────────────────────────────────── */
+.tag-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-top: 16px;
+}
+.tag-panel h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+.tag-json-block {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto;
+  position: relative;
+  color: var(--text);
+}
+
+.copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.tag-url {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+/* ── Form ───────────────────────────────────────────────────── */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.form-group { display: flex; flex-direction: column; gap: 5px; }
+.form-group.full { grid-column: 1 / -1; }
+.form-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.color-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.color-dot {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  border: 2px solid var(--border);
+}
+
+/* ── Log Output ─────────────────────────────────────────────── */
+.log-output {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.7;
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  color: var(--text-muted);
+}
+
+/* ── Toast ──────────────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 20px;
+  font-size: 0.85rem;
+  color: var(--text);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  transform: translateY(100px);
+  opacity: 0;
+  transition: all 0.25s;
+  z-index: 100;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.success { border-left: 3px solid var(--green); }
+.toast.error   { border-left: 3px solid var(--red); }
+
+/* ── Section Headers ────────────────────────────────────────── */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+/* ── Empty State ────────────────────────────────────────────── */
+.empty {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .shell { padding: 0 16px 40px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .spool-grid { grid-template-columns: 1fr; }
+  .kpi-row { grid-template-columns: 1fr 1fr; }
+  header h1 { font-size: 1rem; }
+}
+
+/* ── Animations ─────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.panel.active {
+  animation: fadeIn 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+
+/* ── Loading Spinner ────────────────────────────────────────── */
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <!-- Header -->
+  <header>
+    <h1><span>//</span> spool<span>.</span>bridge</h1>
+    <div class="header-status">
+      <span class="muted">bridge</span>
+      <span id="bridge-indicator"><span class="status-dot unknown"></span><span class="muted">...</span></span>
+      <a href="#" id="open-spoolman" class="btn btn-ghost btn-sm" target="_blank">Spoolman</a>
+    </div>
+  </header>
+
+  <!-- Tabs -->
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-panel="dashboard" role="tab">Dashboard</button>
+    <button class="tab" data-panel="spools" role="tab">Spools</button>
+    <button class="tab" data-panel="tags" role="tab">Write Tags</button>
+    <button class="tab" data-panel="add" role="tab">Add Spool</button>
+    <button class="tab" data-panel="tools" role="tab">Tools</button>
+  </nav>
+
+  <!-- ═══ Dashboard ═══ -->
+  <div class="panel active" id="panel-dashboard">
+    <div class="kpi-row" id="kpis"></div>
+
+    <div class="section-header">
+      <span class="section-title">Spool Inventory</span>
+    </div>
+    <div id="dashboard-spools" class="spool-grid"></div>
+  </div>
+
+  <!-- ═══ Spools ═══ -->
+  <div class="panel" id="panel-spools">
+    <div class="filter-bar">
+      <input type="text" id="spool-search" placeholder="Search spools..." style="flex:1; min-width: 200px;">
+      <select id="spool-filter-brand">
+        <option value="">All Brands</option>
+      </select>
+      <select id="spool-filter-material">
+        <option value="">All Materials</option>
+      </select>
+    </div>
+    <div id="spools-list" class="spool-grid"></div>
+  </div>
+
+  <!-- ═══ Write Tags ═══ -->
+  <div class="panel" id="panel-tags">
+    <p class="muted" style="margin-bottom: 16px; font-size: 0.85rem;">
+      Select a spool to generate its OpenSpool NFC tag data.
+    </p>
+
+    <div class="filter-bar">
+      <input type="text" id="tag-search" placeholder="Search spools..." style="flex:1; min-width: 200px;">
+      <select id="tag-filter">
+        <option value="">All Spools</option>
+        <option value="no-bambu">Third-Party Only</option>
+      </select>
+    </div>
+
+    <div id="tag-spools" class="spool-grid"></div>
+    <div id="tag-output" style="display:none;"></div>
+  </div>
+
+  <!-- ═══ Add Spool ═══ -->
+  <div class="panel" id="panel-add">
+    <div class="card" style="max-width: 600px;">
+      <h3 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 20px;">New Spool</h3>
+      <form id="add-form" class="form-grid">
+        <div class="form-group">
+          <label class="form-label" for="add-brand">Brand</label>
+          <select id="add-brand">
+            <option value="bambu">Bambu Lab</option>
+            <option value="inland">Inland</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="add-material">Material</label>
+          <select id="add-material">
+            <option>PLA</option>
+            <option>PLA Basic</option>
+            <option>PLA Matte</option>
+            <option>PLA+</option>
+            <option>PLA Silk</option>
+            <option>PLA-CF</option>
+            <option>PLA UV</option>
+            <option>PETG</option>
+            <option>PETG HF</option>
+            <option>PETG-CF</option>
+            <option>ABS</option>
+            <option>ASA</option>
+            <option>TPU</option>
+            <option>PA</option>
+            <option>PA-CF</option>
+            <option>PC</option>
+            <option>PVA</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="add-color-name">Color Name</label>
+          <input type="text" id="add-color-name" placeholder="e.g. Black">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="add-color-hex">Color Hex</label>
+          <div class="color-preview">
+            <input type="text" id="add-color-hex" placeholder="000000" style="flex:1;">
+            <div class="color-dot" id="add-color-preview"></div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="add-name">Filament Name (optional)</label>
+          <input type="text" id="add-name" placeholder="Auto-generated if empty">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="add-price">Price (optional)</label>
+          <input type="number" id="add-price" placeholder="0.00" step="0.01">
+        </div>
+        <div class="form-group full" style="margin-top: 8px;">
+          <button type="submit" class="btn btn-primary">Create Spool</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ═══ Tools ═══ -->
+  <div class="panel" id="panel-tools">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 800px;">
+      <div class="card">
+        <h3 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 8px;">Sync AMS</h3>
+        <p class="muted" style="font-size: 0.8rem; margin-bottom: 16px;">
+          Reads AMS trays and creates missing spools in Spoolman with RFID tag linking.
+        </p>
+        <button class="btn btn-primary" id="btn-sync-ams" onclick="runSyncAms()">Run sync-ams.sh</button>
+      </div>
+      <div class="card">
+        <h3 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 8px;">Bridge Service</h3>
+        <p class="muted" style="font-size: 0.8rem; margin-bottom: 16px;">
+          MQTT-to-Spoolman sync daemon. Runs as a systemd service.
+        </p>
+        <button class="btn btn-ghost" onclick="checkBridge()">Refresh Status</button>
+      </div>
+    </div>
+
+    <div style="margin-top: 20px; max-width: 800px;">
+      <div class="section-header">
+        <span class="section-title">Output</span>
+      </div>
+      <div class="log-output" id="tool-log">Ready.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════════
+
+let spools = [];
+let selectedTagSpool = null;
+
+// ═══════════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════════
+
+document.addEventListener('DOMContentLoaded', async () => {
+  setupTabs();
+  setupColorPreview();
+  setupAddForm();
+
+  await loadSpools();
+  renderDashboard();
+  renderSpools();
+  renderTagSpools();
+  checkBridge();
+
+  // Set Spoolman link
+  try {
+    const cfg = await api('/api/config');
+    const link = document.getElementById('open-spoolman');
+    link.href = cfg.spoolman_url || 'http://192.168.50.80:7912';
+  } catch(e) {}
+});
+
+// ═══════════════════════════════════════════════════════════════
+// API
+// ═══════════════════════════════════════════════════════════════
+
+async function api(url, opts = {}) {
+  const r = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  return r.json();
+}
+
+async function loadSpools() {
+  try {
+    spools = await api('/api/spools');
+    spools.sort((a, b) => a.id - b.id);
+  } catch(e) {
+    spools = [];
+    toast('Failed to load spools', 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Tabs
+// ═══════════════════════════════════════════════════════════════
+
+function setupTabs() {
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Dashboard
+// ═══════════════════════════════════════════════════════════════
+
+function renderDashboard() {
+  const totalSpools = spools.length;
+  const totalWeight = spools.reduce((a, s) => a + (s.remaining_weight || 0), 0);
+  const brands = new Set(spools.map(s => (s.filament?.vendor?.name || 'Unknown')));
+  const materials = new Set(spools.map(s => (s.filament?.material || '?')));
+
+  document.getElementById('kpis').innerHTML = `
+    <div class="kpi">
+      <div class="kpi-label">Total Spools</div>
+      <div class="kpi-value accent">${totalSpools}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Total Filament</div>
+      <div class="kpi-value">${(totalWeight / 1000).toFixed(1)}<span class="muted" style="font-size:0.9rem;">kg</span></div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Brands</div>
+      <div class="kpi-value">${brands.size}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Materials</div>
+      <div class="kpi-value">${materials.size}</div>
+    </div>
+  `;
+
+  // Show low-weight spools
+  const lowSpools = spools.filter(s => (s.remaining_weight || 0) < 200 && s.remaining_weight > 0);
+  const el = document.getElementById('dashboard-spools');
+
+  if (lowSpools.length > 0) {
+    document.querySelector('#panel-dashboard .section-title').textContent = `Low Stock (${lowSpools.length})`;
+    el.innerHTML = lowSpools.map(s => spoolCard(s)).join('');
+  } else {
+    document.querySelector('#panel-dashboard .section-title').textContent = 'All Spools';
+    el.innerHTML = spools.map(s => spoolCard(s)).join('');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Spool Rendering
+// ═══════════════════════════════════════════════════════════════
+
+function spoolCard(s, selectable = false) {
+  const f = s.filament || {};
+  const color = f.color_hex || '333';
+  const name = f.name || 'Unknown';
+  const material = f.material || '?';
+  const brand = f.vendor?.name || '?';
+  const remaining = s.remaining_weight || 0;
+  const total = f.weight || 1000;
+  const pct = Math.round((remaining / total) * 100);
+  const barColor = pct > 30 ? 'var(--green)' : pct > 10 ? 'var(--yellow)' : 'var(--red)';
+  const selected = selectable && selectedTagSpool === s.id ? ' selected' : '';
+  const onclick = selectable ? ` onclick="selectTagSpool(${s.id})"` : '';
+
+  return `
+    <div class="spool-card${selected}"${onclick}>
+      <div class="spool-swatch" style="background:#${color};"></div>
+      <div class="spool-info">
+        <div class="spool-name">${name}</div>
+        <div class="spool-meta">
+          <span>${brand}</span>
+          <span>${material}</span>
+          <span class="spool-id">#${s.id}</span>
+        </div>
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-top:4px;">
+          <span class="spool-weight">${remaining.toFixed(0)}g</span>
+          <span class="dim" style="font-size:0.72rem;">${pct}%</span>
+        </div>
+        <div class="weight-bar">
+          <div class="weight-bar-fill" style="width:${pct}%; background:${barColor};"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSpools() {
+  const search = (document.getElementById('spool-search')?.value || '').toLowerCase();
+  const brandFilter = document.getElementById('spool-filter-brand')?.value || '';
+  const matFilter = document.getElementById('spool-filter-material')?.value || '';
+
+  // Populate filter dropdowns
+  const brands = [...new Set(spools.map(s => s.filament?.vendor?.name || 'Unknown'))].sort();
+  const materials = [...new Set(spools.map(s => s.filament?.material || '?'))].sort();
+
+  const brandSel = document.getElementById('spool-filter-brand');
+  const matSel = document.getElementById('spool-filter-material');
+  if (brandSel.options.length <= 1) {
+    brands.forEach(b => brandSel.add(new Option(b, b)));
+  }
+  if (matSel.options.length <= 1) {
+    materials.forEach(m => matSel.add(new Option(m, m)));
+  }
+
+  let filtered = spools.filter(s => {
+    const f = s.filament || {};
+    const text = `${f.name} ${f.material} ${f.vendor?.name} ${f.color_hex}`.toLowerCase();
+    if (search && !text.includes(search)) return false;
+    if (brandFilter && (f.vendor?.name || '') !== brandFilter) return false;
+    if (matFilter && (f.material || '') !== matFilter) return false;
+    return true;
+  });
+
+  document.getElementById('spools-list').innerHTML = filtered.length
+    ? filtered.map(s => spoolCard(s)).join('')
+    : '<div class="empty">No spools match your filters.</div>';
+}
+
+// Attach filter listeners
+document.addEventListener('DOMContentLoaded', () => {
+  ['spool-search', 'spool-filter-brand', 'spool-filter-material'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', renderSpools);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Tag Writer
+// ═══════════════════════════════════════════════════════════════
+
+function renderTagSpools() {
+  const search = (document.getElementById('tag-search')?.value || '').toLowerCase();
+  const filter = document.getElementById('tag-filter')?.value || '';
+
+  let filtered = spools.filter(s => {
+    const f = s.filament || {};
+    const text = `${f.name} ${f.material} ${f.vendor?.name}`.toLowerCase();
+    if (search && !text.includes(search)) return false;
+    if (filter === 'no-bambu' && (f.vendor?.name || '').toLowerCase() === 'bambu lab') return false;
+    return true;
+  });
+
+  document.getElementById('tag-spools').innerHTML = filtered.length
+    ? filtered.map(s => spoolCard(s, true)).join('')
+    : '<div class="empty">No spools found.</div>';
+}
+
+async function selectTagSpool(id) {
+  selectedTagSpool = id;
+  renderTagSpools();
+
+  try {
+    const data = await api(`/api/tag/${id}`);
+    const jsonStr = JSON.stringify(data.tag_json, null, 2);
+
+    document.getElementById('tag-output').style.display = 'block';
+    document.getElementById('tag-output').innerHTML = `
+      <div class="tag-panel">
+        <h3>NFC Tag Data — Spool #${id}</h3>
+
+        <div style="margin-bottom:14px;">
+          <span class="form-label">OpenSpool JSON</span>
+          <span class="dim" style="font-size:0.72rem; margin-left:8px;">MIME: application/json</span>
+        </div>
+        <div class="tag-json-block" id="tag-json-text">${escHtml(jsonStr)}</div>
+        <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="copyTag()">Copy JSON</button>
+
+        <div style="margin-top:20px;">
+          <span class="form-label">OpenSpoolman URL</span>
+          <span class="dim" style="font-size:0.72rem; margin-left:8px;">Optional 2nd NDEF record</span>
+        </div>
+        <div class="tag-url" id="tag-url-text">${escHtml(data.openspool_url)}</div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:10px;" onclick="copyUrl()">Copy URL</button>
+      </div>
+    `;
+  } catch(e) {
+    toast('Failed to load tag data', 'error');
+  }
+}
+
+function copyTag() {
+  const text = document.getElementById('tag-json-text').textContent;
+  navigator.clipboard.writeText(text);
+  toast('JSON copied to clipboard', 'success');
+}
+
+function copyUrl() {
+  const text = document.getElementById('tag-url-text').textContent;
+  navigator.clipboard.writeText(text);
+  toast('URL copied to clipboard', 'success');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  ['tag-search', 'tag-filter'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', renderTagSpools);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Add Spool
+// ═══════════════════════════════════════════════════════════════
+
+function setupColorPreview() {
+  const hex = document.getElementById('add-color-hex');
+  const dot = document.getElementById('add-color-preview');
+  if (hex && dot) {
+    hex.addEventListener('input', () => {
+      const v = hex.value.replace('#', '');
+      dot.style.background = v.length >= 6 ? `#${v}` : 'var(--bg-input)';
+    });
+  }
+}
+
+function setupAddForm() {
+  document.getElementById('add-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Creating...';
+
+    try {
+      const data = {
+        brand: document.getElementById('add-brand').value,
+        material: document.getElementById('add-material').value,
+        color_name: document.getElementById('add-color-name').value,
+        color_hex: document.getElementById('add-color-hex').value.replace('#', ''),
+        name: document.getElementById('add-name').value,
+        price: document.getElementById('add-price').value || null,
+      };
+
+      const result = await api('/api/spools', { method: 'POST', body: data });
+
+      if (result.id) {
+        toast(`Spool #${result.id} created`, 'success');
+        e.target.reset();
+        document.getElementById('add-color-preview').style.background = 'var(--bg-input)';
+        await loadSpools();
+        renderDashboard();
+        renderSpools();
+        renderTagSpools();
+      } else {
+        toast('Failed to create spool', 'error');
+      }
+    } catch(err) {
+      toast('Error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Create Spool';
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Tools
+// ═══════════════════════════════════════════════════════════════
+
+async function runSyncAms() {
+  const btn = document.getElementById('btn-sync-ams');
+  const log = document.getElementById('tool-log');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Running...';
+  log.textContent = 'Running sync-ams.sh...\n';
+
+  try {
+    const result = await api('/api/sync-ams', { method: 'POST' });
+    log.textContent = result.stdout || result.stderr || 'No output.';
+    if (result.returncode === 0) {
+      toast('AMS sync complete', 'success');
+      await loadSpools();
+      renderDashboard();
+    } else {
+      toast('AMS sync had errors', 'error');
+    }
+  } catch(e) {
+    log.textContent = 'Error: ' + e.message;
+    toast('Failed to run sync', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Run sync-ams.sh';
+  }
+}
+
+async function checkBridge() {
+  const el = document.getElementById('bridge-indicator');
+  try {
+    const data = await api('/api/bridge-status');
+    if (data.active) {
+      el.innerHTML = '<span class="status-dot on"></span><span class="green">running</span>';
+    } else {
+      el.innerHTML = '<span class="status-dot off"></span><span class="red">stopped</span>';
+    }
+    if (data.logs) {
+      document.getElementById('tool-log').textContent = data.logs;
+    }
+  } catch(e) {
+    el.innerHTML = '<span class="status-dot unknown"></span><span class="muted">unknown</span>';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════════
+
+function escHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function toast(msg, type = 'success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast ${type} show`;
+  setTimeout(() => el.classList.remove('show'), 3000);
+}
+</script>
+
+</body>
+</html>
