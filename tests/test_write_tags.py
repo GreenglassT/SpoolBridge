@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from write_tags import spool_to_openspool_json, MATERIAL_MAP, DEFAULT_TEMPS
+from config import build_openspool_tag as spool_to_openspool_json, MATERIAL_MAP, DEFAULT_TEMPS
 
 
 def _make_spool(material="PLA", color_hex="ff0000", vendor_name="Bambu Lab", extruder_temp=None):

@@ -136,6 +136,9 @@ def reset_bridge_globals():
         bridge.unknown_spools = {}
         bridge.ams_environment = {}
         bridge._activity_line_count = 0
+        bridge._ams_initialized = True  # skip init path in tests
+        bridge._bridge_state_dirty = True  # allow state writes
+        bridge.ams_tray_remain = {}
     except ImportError:
         pass
     yield

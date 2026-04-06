@@ -3,7 +3,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from server import _read_jsonl, MATERIAL_MAP, DEFAULT_TEMPS
+from server import _read_jsonl
+from config import MATERIAL_MAP, DEFAULT_TEMPS
 
 
 def test_read_jsonl_empty(tmp_path):
