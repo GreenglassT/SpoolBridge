@@ -1,0 +1,11 @@
+venv/
+data/
+__pycache__/
+*.pyc
+*.log
+*.jpg
+*.env
+.git/
+.gitignore
+.superpowers/
+.playwright-mcp/

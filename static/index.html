@@ -900,10 +900,8 @@ input::placeholder { color: var(--text-dim); }
       <form id="add-form" class="form-grid">
         <div class="form-group">
           <label class="form-label" for="add-brand">Brand</label>
-          <select id="add-brand">
-            <option value="bambu">Bambu Lab</option>
-            <option value="inland">Inland</option>
-          </select>
+          <select id="add-brand"></select>
+          <input type="text" id="add-brand-custom" placeholder="New brand name" style="display:none; margin-top:6px;">
         </div>
         <div class="form-group">
           <label class="form-label" for="add-material">Material</label>
@@ -927,8 +925,32 @@ input::placeholder { color: var(--text-dim); }
           <input type="text" id="add-name" placeholder="Auto-generated if empty">
         </div>
         <div class="form-group">
-          <label class="form-label" for="add-price">Price (optional)</label>
+          <label class="form-label" for="add-price">Price</label>
           <input type="number" id="add-price" placeholder="0.00" step="0.01">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="add-net-weight">Net Weight (g)</label>
+          <input type="number" id="add-net-weight" value="1000" step="1">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="add-spool-weight">Spool Weight (g)</label>
+          <input type="number" id="add-spool-weight" placeholder="From vendor" step="1">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="add-diameter">Diameter (mm)</label>
+          <input type="number" id="add-diameter" value="1.75" step="0.05">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="add-density">Density (g/cm³)</label>
+          <input type="number" id="add-density" value="1.24" step="0.01">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="add-nozzle-temp">Nozzle Temp (°C)</label>
+          <input type="number" id="add-nozzle-temp" placeholder="e.g. 210" step="5">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="add-bed-temp">Bed Temp (°C)</label>
+          <input type="number" id="add-bed-temp" placeholder="e.g. 60" step="5">
         </div>
         <div class="form-group full" style="margin-top: 8px;">
           <button type="submit" class="btn btn-primary">Create Spool</button>
@@ -1001,7 +1023,7 @@ input::placeholder { color: var(--text-dim); }
       <div class="card">
         <h3 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 8px;">Bridge Service</h3>
         <p class="muted" style="font-size: 0.8rem; margin-bottom: 16px;">
-          MQTT-to-Spoolman sync daemon. Runs as a systemd service.
+          MQTT-to-Spoolman sync daemon.
         </p>
         <div style="display:flex; gap:6px; flex-wrap:wrap;">
           <button class="btn btn-sm btn-green" onclick="bridgeAction('start')">Start</button>
@@ -1009,9 +1031,6 @@ input::placeholder { color: var(--text-dim); }
           <button class="btn btn-sm btn-ghost" onclick="bridgeAction('restart')">Restart</button>
           <button class="btn btn-sm btn-ghost" onclick="checkBridge()">Refresh</button>
         </div>
-        <p class="dim" style="font-size: 0.7rem; margin-top: 10px;">
-          Start/Stop/Restart require the openspool-bridge systemd service to be configured.
-        </p>
       </div>
     </div>
 
@@ -1877,8 +1896,10 @@ function renderExistingFilaments() {
 
   const filaments = (window._filamentCache || []).slice();
 
-  // Populate filter dropdowns (only once)
-  const brands = [...new Set(filaments.map(f => (f.vendor?.name || '')).filter(Boolean))].sort();
+  // Merge vendor names from both filaments and vendor cache
+  const vendorNames = (window._vendorCache || []).map(v => v.name);
+  const filamentBrands = filaments.map(f => (f.vendor?.name || '')).filter(Boolean);
+  const brands = [...new Set([...vendorNames, ...filamentBrands])].sort();
   const materials = [...new Set(filaments.map(f => f.material || '').filter(Boolean))].sort();
   const brandSel = document.getElementById('add-existing-brand');
   const matSel = document.getElementById('add-existing-material');
@@ -1893,9 +1914,17 @@ function renderExistingFilaments() {
     matSel.value = cur;
   }
 
-  // Populate material datalist for new filament form
+  // Populate datalists and dropdowns for new filament form
   const datalist = document.getElementById('add-material-list');
   if (datalist) datalist.innerHTML = materials.map(m => `<option value="${m}">`).join('');
+
+  const brandSel2 = document.getElementById('add-brand');
+  if (brandSel2) {
+    const cur = brandSel2.value;
+    brandSel2.innerHTML = brands.map(b => `<option value="${b}">${b}</option>`).join('')
+      + '<option value="__other__">+ New Brand</option>';
+    if (cur && cur !== '__other__') brandSel2.value = cur;
+  }
 
   let filtered = filaments;
   if (search) filtered = filtered.filter(f =>
@@ -1953,6 +1982,11 @@ async function loadFilamentCache() {
   } catch(e) {
     window._filamentCache = [];
   }
+  try {
+    window._vendorCache = await api('/api/vendors');
+  } catch(e) {
+    window._vendorCache = [];
+  }
 }
 
 function setupAddFilters() {
@@ -1968,6 +2002,28 @@ function setupAddFilters() {
       document.getElementById('add-color-preview').style.background = `#${hex}`;
     }
   });
+  // Auto-fill spool weight from vendor and handle "New Brand"
+  document.getElementById('add-brand')?.addEventListener('change', function() {
+    const customEl = document.getElementById('add-brand-custom');
+    const spoolWeightEl = document.getElementById('add-spool-weight');
+    if (this.value === '__other__') {
+      customEl.style.display = '';
+      customEl.focus();
+      spoolWeightEl.value = '';
+      spoolWeightEl.placeholder = 'Enter spool weight';
+    } else {
+      customEl.style.display = 'none';
+      customEl.value = '';
+      const vendors = window._vendorCache || [];
+      const match = vendors.find(v => v.name === this.value);
+      if (match && match.empty_spool_weight) {
+        spoolWeightEl.value = match.empty_spool_weight;
+      } else {
+        spoolWeightEl.value = '';
+        spoolWeightEl.placeholder = 'From vendor';
+      }
+    }
+  });
 }
 
 function setupAddForm() {
@@ -1979,13 +2035,24 @@ function setupAddForm() {
 
     try {
       const colorName = document.getElementById('add-color-name').value.trim();
+      const brandVal = document.getElementById('add-brand').value;
+      const brandName = brandVal === '__other__'
+        ? document.getElementById('add-brand-custom').value.trim()
+        : brandVal;
+      if (!brandName) { toast('Please enter a brand name', 'error'); btn.disabled = false; btn.textContent = 'Create Spool'; return; }
       const data = {
-        brand: document.getElementById('add-brand').value,
+        brand: brandName,
         material: document.getElementById('add-material').value,
         color_name: colorName,
         color_hex: document.getElementById('add-color-hex').value.replace('#', ''),
         name: document.getElementById('add-name').value,
         price: document.getElementById('add-price').value || null,
+        net_weight: parseFloat(document.getElementById('add-net-weight').value) || 1000,
+        spool_weight: parseFloat(document.getElementById('add-spool-weight').value) || null,
+        diameter: parseFloat(document.getElementById('add-diameter').value) || 1.75,
+        density: parseFloat(document.getElementById('add-density').value) || 1.24,
+        nozzle_temp: parseInt(document.getElementById('add-nozzle-temp').value) || null,
+        bed_temp: parseInt(document.getElementById('add-bed-temp').value) || null,
       };
 
       const result = await api('/api/spools', { method: 'POST', body: data });

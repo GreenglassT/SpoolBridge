@@ -1,0 +1,40 @@
+services:
+  spoolman:
+    image: ghcr.io/donkie/spoolman:latest
+    container_name: spoolman
+    restart: unless-stopped
+    ports:
+      - "7912:8000"
+    volumes:
+      - ./data/spoolman:/home/app/.local/share/spoolman
+
+  bridge:
+    build: .
+    container_name: spoolbridge-bridge
+    restart: unless-stopped
+    env_file: bridge.env
+    environment:
+      - SPOOLMAN_URL=http://spoolman:8000
+      - DATA_DIR=/app/runtime
+    volumes:
+      - ./data/runtime:/app/runtime
+    command: python3 bridge.py
+    depends_on:
+      - spoolman
+
+  web:
+    build: .
+    container_name: spoolbridge-web
+    restart: unless-stopped
+    env_file: bridge.env
+    environment:
+      - SPOOLMAN_URL=http://spoolman:8000
+      - DATA_DIR=/app/runtime
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./data/runtime:/app/runtime
+      - ./bridge.env:/app/bridge.env
+    command: python3 server.py
+    depends_on:
+      - spoolman

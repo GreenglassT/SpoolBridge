@@ -34,14 +34,12 @@ load_env()
 
 SPOOLMAN_URL = os.environ.get("SPOOLMAN_URL", "http://localhost:7912")
 SPOOLMAN_PUBLIC_URL = os.environ.get("SPOOLMAN_PUBLIC_URL", "")
-SCRIPTS_DIR = Path(__file__).parent
+SCRIPTS_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent))
 BRIDGE_COMMANDS_PATH = SCRIPTS_DIR / "bridge_commands.json"
 PORT = int(os.environ.get("PORT", 5555))
 
-BRANDS = {
-    "bambu": {"name": "Bambu Lab", "spool_weight": 251.0, "net_weight": 1000.0},
-    "inland": {"name": "Inland", "spool_weight": 145.0, "net_weight": 1000.0},
-}
+DEFAULT_SPOOL_WEIGHT = 200.0   # empty spool weight if vendor doesn't specify
+DEFAULT_NET_WEIGHT = 1000.0    # filament net weight default
 
 # ============================================================
 # FLASK APP
@@ -82,8 +80,7 @@ def get_spools():
 @app.route("/api/spools", methods=["POST"])
 def create_spool():
     data = request.json
-    brand_key = (data.get("brand") or "bambu").lower()
-    brand = BRANDS.get(brand_key, BRANDS["bambu"])
+    brand_name = data.get("brand", "").strip()
 
     material = data.get("material", "PLA")
     color_hex = data.get("color_hex", "000000").lstrip("#")
@@ -93,17 +90,26 @@ def create_spool():
 
     # Find or create vendor
     vendors = http_requests.get(f"{SPOOLMAN_URL}/api/v1/vendor").json()
-    vendor_id = None
+    vendor = None
     for v in vendors:
-        if v["name"].lower() == brand["name"].lower():
-            vendor_id = v["id"]
+        if v["name"].lower() == brand_name.lower():
+            vendor = v
             break
-    if not vendor_id:
+    if not vendor:
+        new_vendor_weight = data.get("spool_weight") or DEFAULT_SPOOL_WEIGHT
         vr = http_requests.post(
             f"{SPOOLMAN_URL}/api/v1/vendor",
-            json={"name": brand["name"]},
+            json={"name": brand_name, "empty_spool_weight": new_vendor_weight},
         )
-        vendor_id = vr.json()["id"]
+        vendor = vr.json()
+
+    vendor_id = vendor["id"]
+    spool_weight = data.get("spool_weight") or vendor.get("empty_spool_weight") or DEFAULT_SPOOL_WEIGHT
+    net_weight = data.get("net_weight") or DEFAULT_NET_WEIGHT
+    diameter = data.get("diameter") or 1.75
+    density = data.get("density") or 1.24
+    nozzle_temp = data.get("nozzle_temp")
+    bed_temp = data.get("bed_temp")
 
     # Check for existing filament
     filaments = http_requests.get(f"{SPOOLMAN_URL}/api/v1/filament").json()
@@ -122,13 +128,17 @@ def create_spool():
             "vendor_id": vendor_id,
             "material": material,
             "color_hex": color_hex,
-            "density": 1.24,
-            "diameter": 1.75,
-            "weight": brand["net_weight"],
-            "spool_weight": brand["spool_weight"],
+            "density": density,
+            "diameter": diameter,
+            "weight": net_weight,
+            "spool_weight": spool_weight,
         }
         if price:
             fil_data["price"] = float(price)
+        if nozzle_temp:
+            fil_data["settings_extruder_temp"] = int(nozzle_temp)
+        if bed_temp:
+            fil_data["settings_bed_temp"] = int(bed_temp)
         fr = http_requests.post(
             f"{SPOOLMAN_URL}/api/v1/filament", json=fil_data,
         )
@@ -137,7 +147,7 @@ def create_spool():
     # Create spool
     spool_data = {
         "filament_id": filament_id,
-        "remaining_weight": brand["net_weight"],
+        "remaining_weight": net_weight,
         "location": data.get("location", LOCATION_STORAGE),
     }
     sr = http_requests.post(f"{SPOOLMAN_URL}/api/v1/spool", json=spool_data)
@@ -434,15 +444,6 @@ def assign_tray(spool_id, tray_name=None):
     except http_requests.exceptions.RequestException as e:
         return jsonify({"error": str(e)}), 502
 
-    # For AMS trays (A1-A4), push filament settings to the printer via bridge
-    if tray and tray.startswith("A") and tray != "External":
-        try:
-            cmd = {"command": "load_ams_tray", "spool_id": spool_id, "tray": tray}
-            BRIDGE_COMMANDS_PATH.write_text(json.dumps(cmd))
-        except Exception as e:
-            # Non-fatal — Spoolman was updated, just couldn't push to printer
-            pass
-
     return jsonify(r.json())
 
 
@@ -483,14 +484,15 @@ def get_tag(spool_id):
 
 @app.route("/api/sync-ams", methods=["POST"])
 def sync_ams():
-    script = SCRIPTS_DIR / "sync-ams.sh"
+    app_dir = Path(__file__).parent
+    script = app_dir / "sync-ams.sh"
     if not script.exists():
         return jsonify({"error": "sync-ams.sh not found"}), 404
 
     try:
         result = subprocess.run(
             ["bash", str(script)],
-            capture_output=True, text=True, timeout=30, cwd=str(SCRIPTS_DIR),
+            capture_output=True, text=True, timeout=30, cwd=str(app_dir),
         )
         return jsonify({
             "stdout": result.stdout,
@@ -501,18 +503,36 @@ def sync_ams():
         return jsonify({"error": "Script timed out"}), 504
 
 
+BRIDGE_CONTAINER = "spoolbridge-bridge"
+
+
 @app.route("/api/bridge-status")
 def bridge_status():
+    active = False
+    logs = ""
+
+    # Try Docker first
     try:
         result = subprocess.run(
-            ["systemctl", "is-active", "openspool-bridge"],
+            ["docker", "inspect", "-f", "{{.State.Running}}", BRIDGE_CONTAINER],
             capture_output=True, text=True, timeout=5,
         )
-        active = result.stdout.strip() == "active"
+        active = result.stdout.strip() == "true"
     except Exception:
-        active = False
+        pass
 
-    # Fallback: check for running process
+    # Fallback: systemd
+    if not active:
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", "openspool-bridge"],
+                capture_output=True, text=True, timeout=5,
+            )
+            active = result.stdout.strip() == "active"
+        except Exception:
+            pass
+
+    # Fallback: process check
     if not active:
         try:
             result = subprocess.run(
@@ -523,16 +543,22 @@ def bridge_status():
         except Exception:
             pass
 
-    # Get recent logs
-    logs = ""
+    # Get logs — try Docker first, then journalctl
     try:
         result = subprocess.run(
-            ["journalctl", "-u", "openspool-bridge", "-n", "20", "--no-pager"],
+            ["docker", "logs", "--tail", "30", BRIDGE_CONTAINER],
             capture_output=True, text=True, timeout=5,
         )
-        logs = result.stdout
+        logs = result.stdout or result.stderr
     except Exception:
-        pass
+        try:
+            result = subprocess.run(
+                ["journalctl", "-u", "openspool-bridge", "-n", "20", "--no-pager"],
+                capture_output=True, text=True, timeout=5,
+            )
+            logs = result.stdout
+        except Exception:
+            pass
 
     return jsonify({"active": active, "logs": logs})
 
@@ -544,6 +570,19 @@ ALLOWED_BRIDGE_ACTIONS = {"start", "stop", "restart"}
 def bridge_action(action):
     if action not in ALLOWED_BRIDGE_ACTIONS:
         return jsonify({"error": "Invalid action"}), 400
+
+    # Try Docker first
+    try:
+        result = subprocess.run(
+            ["docker", action, BRIDGE_CONTAINER],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            return jsonify({"status": "ok"})
+    except Exception:
+        pass
+
+    # Fallback: systemd
     try:
         result = subprocess.run(
             ["systemctl", action, "openspool-bridge"],
@@ -569,13 +608,12 @@ def get_config():
 
     return jsonify({
         "spoolman_url": public_url,
-        "brands": {k: v["name"] for k, v in BRANDS.items()},
     })
 
 
 # ── Settings ──────────────────────────────────────────────────
 
-ENV_PATH = SCRIPTS_DIR / "bridge.env"
+ENV_PATH = Path(__file__).parent / "bridge.env"
 
 # Keys we allow reading/writing, in display order
 SETTINGS_KEYS = [

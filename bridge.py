@@ -72,15 +72,17 @@ _ams_initialized = False   # True after first pushall seeds the baseline
 active_spool_id = None     # Spoolman spool ID currently printing
 active_print_name = ""     # subtask_name of the current print job
 last_gcode_state = ""      # track state transitions to fire finish only once
-bridge_state_path = Path(__file__).parent / "bridge_state.json"
+DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent))
+bridge_state_path = DATA_DIR / "bridge_state.json"
 unknown_spools = {}        # {tray_key: {type, color, tag_uid, tray_num, tray}}
 ams_environment = {}       # {humidity, temp}
 ams_tray_remain = {}       # {slot_key: remain%} — updated separately from change detection
+_last_synced_remain = {}   # {slot_key: remain%} — last value written to Spoolman
 printer_telemetry = {}     # live print status (progress, temps, fans, speed, etc.)
 print_start_time = None    # epoch when gcode_state first became RUNNING
 _bridge_state_dirty = True # write bridge_state.json only when state changed
 mqtt_client = None          # set in main(); used by publish_external_filament()
-bridge_commands_path = Path(__file__).parent / "bridge_commands.json"
+bridge_commands_path = DATA_DIR / "bridge_commands.json"
 
 
 
@@ -93,6 +95,23 @@ def sm_get(endpoint):
     r = requests.get(f"{SPOOLMAN_URL}/api/v1/{endpoint}")
     r.raise_for_status()
     return r.json()
+
+
+def ensure_extra_fields():
+    """Register required extra fields in Spoolman if not already present."""
+    required = ["tag", "active_tray"]
+    try:
+        existing = requests.get(f"{SPOOLMAN_URL}/api/v1/field/spool").json()
+        existing_names = {f["name"] for f in existing}
+        for name in required:
+            if name not in existing_names:
+                requests.post(
+                    f"{SPOOLMAN_URL}/api/v1/field/spool/{name}",
+                    json={"name": name, "field_type": "text"},
+                )
+                log.info(f"Registered Spoolman extra field: {name}")
+    except Exception as e:
+        log.warning(f"Could not register extra fields: {e}")
 
 
 def sm_patch(endpoint, data):
@@ -153,6 +172,147 @@ def find_spool_by_tag(tag_uid, tray_uuid="", spools=None):
         if tag and (tag == tag_uid or tag == tray_uuid):
             return s
     return None
+
+
+def auto_create_bambu_spool(tray_data, tray_name, remain_pct=None,
+                            vendors=None, filaments=None):
+    """Auto-create a Bambu spool in Spoolman from AMS RFID data."""
+    tag_uid = tray_data.get("tag_uid", "")
+    tray_uuid = tray_data.get("tray_uuid", "")
+    material = tray_data.get("type", "PLA")
+    color_hex = tray_data.get("color", "000000")
+    sub_brand = tray_data.get("sub_brand", "")
+    nozzle_min = tray_data.get("nozzle_min", 190)
+    nozzle_max = tray_data.get("nozzle_max", 230)
+    net_weight = tray_data.get("net_weight", 1000) or 1000
+
+    color_name = ""
+    hex_lower = color_hex.lower()
+    if hex_lower in ("000000",):
+        color_name = "Black"
+    elif hex_lower in ("ffffff",):
+        color_name = "White"
+    else:
+        color_name = f"#{color_hex}"
+
+    display_name = f"{sub_brand} {color_name}".strip() if sub_brand else f"{material} {color_name}"
+
+    try:
+        if vendors is None:
+            vendors = sm_get("vendor")
+        vendor_id = None
+        for v in vendors:
+            if v["name"].lower() == "bambu lab":
+                vendor_id = v["id"]
+                break
+        if not vendor_id:
+            r = requests.post(f"{SPOOLMAN_URL}/api/v1/vendor",
+                              json={"name": "Bambu Lab", "empty_spool_weight": 251.0})
+            vendor_id = r.json()["id"]
+
+        if filaments is None:
+            filaments = sm_get("filament")
+        filament_id = None
+        for f in filaments:
+            f_mat = (f.get("material") or "").lower()
+            f_color = (f.get("color_hex") or "").lower()
+            f_vendor = (f.get("vendor") or {}).get("id")
+            if f_mat == material.lower() and f_color == color_hex.lower() and f_vendor == vendor_id:
+                filament_id = f["id"]
+                break
+
+        if not filament_id:
+            fil_data = {
+                "name": display_name,
+                "vendor_id": vendor_id,
+                "material": material,
+                "color_hex": color_hex,
+                "density": 1.24,
+                "diameter": 1.75,
+                "weight": net_weight,
+                "spool_weight": 251.0,
+                "settings_extruder_temp": nozzle_min,
+            }
+            r = requests.post(f"{SPOOLMAN_URL}/api/v1/filament", json=fil_data)
+            filament_id = r.json()["id"]
+            log.info(f"Auto-created filament: {display_name} (#{filament_id})")
+
+        # Create spool with tag linked
+        remaining = net_weight
+        if remain_pct is not None and 0 <= remain_pct <= 100:
+            remaining = round(net_weight * remain_pct / 100)
+        spool_data = {
+            "filament_id": filament_id,
+            "remaining_weight": remaining,
+            "location": tray_location(tray_name),
+        }
+        r = requests.post(f"{SPOOLMAN_URL}/api/v1/spool", json=spool_data)
+        spool = r.json()
+        spool_id = spool["id"]
+
+        # Link the RFID tag
+        tag_value = tag_uid or tray_uuid
+        sm_patch(f"spool/{spool_id}", {
+            "extra": {
+                "tag": extra_quote(tag_value),
+                "active_tray": extra_quote(tray_name),
+            },
+        })
+
+        log.info(f"Auto-created spool #{spool_id}: {display_name} → {tray_name} (tag {tag_value[:8]}...)")
+        return spool
+
+    except Exception as e:
+        log.error(f"Failed to auto-create Bambu spool: {e}")
+        return None
+
+
+def sync_remain_to_spoolman():
+    """Sync AMS remaining % to Spoolman when it changes by 2%+."""
+    global _last_synced_remain
+    if not ams_tray_remain or not current_ams_trays:
+        return
+
+    # Check if any tray needs syncing before fetching spools
+    needs_sync = any(
+        _last_synced_remain.get(t) is None or abs(pct - _last_synced_remain.get(t, 0)) >= 2
+        for t, pct in ams_tray_remain.items()
+    )
+    if not needs_sync:
+        return
+
+    all_spools = sm_get("spool")
+
+    for tray_name, pct in ams_tray_remain.items():
+        last = _last_synced_remain.get(tray_name)
+        if last is not None and abs(pct - last) < 2:
+            continue
+
+        tray_idx = int(tray_name[1]) - 1
+        slot_key = f"A0_{tray_idx}"
+        tray_data = current_ams_trays.get(slot_key)
+        if not tray_data:
+            continue
+
+        tag_uid = tray_data.get("tag_uid", "")
+        tray_uuid = tray_data.get("tray_uuid", "")
+        if not tag_uid and not tray_uuid:
+            continue
+
+        spool = find_spool_by_tag(tag_uid, tray_uuid, spools=all_spools)
+        if not spool:
+            continue
+
+        net_weight = (spool.get("filament") or {}).get("weight") or 1000
+        new_weight = round(net_weight * pct / 100)
+        old_weight = spool.get("remaining_weight", 0)
+
+        try:
+            sm_patch(f"spool/{spool['id']}", {"remaining_weight": new_weight})
+            _last_synced_remain[tray_name] = pct
+            log.info(f"Synced {tray_name} weight: {old_weight:.0f}g → {new_weight}g ({pct}%)")
+        except Exception as e:
+            log.warning(f"Failed to sync {tray_name} weight: {e}")
 
 
 def update_spool_tray(spool_id, tray_name):
@@ -229,7 +389,7 @@ def publish_external_filament(spool):
 # EVENT LOGGING
 # ============================================================
 
-SCRIPT_DIR = Path(__file__).parent
+SCRIPT_DIR = DATA_DIR
 
 
 _activity_line_count = 0
@@ -343,27 +503,6 @@ def process_commands():
                 spool_name=f.get("name", "?"),
                 detail="Loaded via API"
             )
-        elif cmd.get("command") == "load_ams_tray":
-            spool_id = cmd.get("spool_id")
-            tray_name = cmd.get("tray")  # "A1"-"A4"
-            if not spool_id or not tray_name:
-                log.error("load_ams_tray command missing spool_id or tray")
-                return
-            tray_idx = int(tray_name[1]) - 1  # "A1"→0, "A2"→1, etc.
-            try:
-                spool = sm_get(f"spool/{spool_id}")
-            except Exception as e:
-                log.error(f"Failed to fetch spool #{spool_id}: {e}")
-                return
-            publish_filament_setting(spool, ams_id=0, tray_id=tray_idx)
-            f = spool.get("filament", {})
-            log_event(
-                "tray_load",
-                tray=tray_name,
-                spool_id=spool_id,
-                spool_name=f.get("name", "?"),
-                detail="Pushed via API"
-            )
         else:
             log.warning(f"Unknown command: {cmd.get('command')}")
     except json.JSONDecodeError:
@@ -414,6 +553,10 @@ def parse_ams_trays(msg_data):
                     "color": (tray.get("tray_color") or "")[:6],
                     "tag_uid": tray.get("tag_uid", ""),
                     "tray_uuid": tray.get("tray_uuid", ""),
+                    "sub_brand": tray.get("tray_sub_brands", ""),
+                    "nozzle_min": int(tray.get("nozzle_temp_min", 0)),
+                    "nozzle_max": int(tray.get("nozzle_temp_max", 0)),
+                    "net_weight": int(tray.get("tray_weight", 0)),
                 }
 
     return trays
@@ -570,16 +713,39 @@ def handle_ams_change(new_trays):
     """Handle AMS tray changes (Bambu RFID detection)."""
     global current_ams_trays, _ams_initialized, _bridge_state_dirty
 
-    # First pushall after startup: seed baseline without logging events
+    # First pushall after startup: seed baseline and auto-create missing spools
     if not _ams_initialized:
         _ams_initialized = True
         current_ams_trays = dict(new_trays)
         _bridge_state_dirty = True
-        log.info(f"AMS baseline: {len(new_trays)} trays loaded (no events logged)")
+        log.info(f"AMS baseline: {len(new_trays)} trays loaded")
+
+        # Auto-create any Bambu spools not yet in Spoolman
+        all_spools = sm_get("spool")
+        cached_vendors = sm_get("vendor")
+        cached_filaments = sm_get("filament")
+        for slot_key, tray_data in new_trays.items():
+            tag_uid = tray_data.get("tag_uid", "")
+            tray_uuid = tray_data.get("tray_uuid", "")
+            if tag_uid or tray_uuid:
+                spool = find_spool_by_tag(tag_uid, tray_uuid, spools=all_spools)
+                if not spool:
+                    tray_num = int(slot_key.split("_")[1]) + 1
+                    remain = ams_tray_remain.get(f"A{tray_num}")
+                    spool = auto_create_bambu_spool(
+                        tray_data, f"A{tray_num}", remain_pct=remain,
+                        vendors=cached_vendors, filaments=cached_filaments,
+                    )
+                    if spool:
+                        all_spools.append(spool)
+                else:
+                    update_spool_tray(spool["id"], f"A{int(slot_key.split('_')[1]) + 1}")
         return
 
-    # Fetch spools once for all tray lookups (avoids N+1 API calls)
-    changed = [k for k, v in new_trays.items() if current_ams_trays.get(k) != v]
+    # Compare only identity fields (not nozzle temps or net_weight which can fluctuate)
+    identity_keys = ("type", "color", "tag_uid", "tray_uuid")
+    changed = [k for k, v in new_trays.items()
+               if any(v.get(f) != (current_ams_trays.get(k) or {}).get(f) for f in identity_keys)]
     if not changed:
         return
     all_spools = sm_get("spool")
@@ -593,6 +759,10 @@ def handle_ams_change(new_trays):
 
         if tag_uid or tray_uuid:
             spool = find_spool_by_tag(tag_uid, tray_uuid, spools=all_spools)
+            if not spool:
+                # Auto-create Bambu spool from RFID data
+                remain = ams_tray_remain.get(f"A{tray_num}")
+                spool = auto_create_bambu_spool(tray_data, f"A{tray_num}", remain_pct=remain)
             if spool:
                 f = spool.get("filament", {})
                 log.info(
@@ -604,7 +774,7 @@ def handle_ams_change(new_trays):
                 unknown_spools.pop(slot_key, None)
             else:
                 log.info(
-                    f"AMS Tray {tray_num}: Unknown tag {tag_uid[:8]}... "
+                    f"AMS Tray {tray_num}: Failed to create spool for tag {tag_uid[:8]}... "
                     f"({tray_data['type']} #{tray_data['color']})"
                 )
                 log_event("tray_load", tray=f"A{tray_num}", detail=f"Unknown tag {tag_uid[:8]}... ({tray_data['type']} #{tray_data['color']})")
@@ -658,8 +828,19 @@ def handle_print_finish(finish_data):
             log.warning(f"Could not fetch spool #{active_spool_id} for print log: {e}")
 
     if used > 0 and active_spool_id:
-        log.info(f"Print {status}, used {used:.1f}g from spool #{active_spool_id}")
-        update_spool_weight(active_spool_id, used)
+        # Check if spool is in an AMS tray (sensor-tracked) or external/third-party
+        is_ams_tracked = False
+        try:
+            active_tray = extra_unquote((spool.get("extra") or {}).get("active_tray", ""))
+            is_ams_tracked = active_tray and active_tray.startswith("A") and active_tray != "External"
+        except Exception:
+            pass
+
+        if is_ams_tracked:
+            log.info(f"Print {status}, used {used:.1f}g from spool #{active_spool_id} (AMS sensor tracks weight)")
+        else:
+            log.info(f"Print {status}, used {used:.1f}g from spool #{active_spool_id}")
+            update_spool_weight(active_spool_id, used)
     elif used > 0:
         log.info(f"Print {status}, used {used:.1f}g but no active spool tracked")
     else:
@@ -732,12 +913,7 @@ def on_message(client, userdata, msg):
     if vt:
         handle_vt_tray_change(vt)
 
-    # Parse AMS trays
-    ams = parse_ams_trays(data)
-    if ams:
-        handle_ams_change(ams)
-
-    # Parse AMS environment + tray remaining %
+    # Parse AMS environment + tray remaining % (before tray change handler so remain is available)
     global ams_environment, ams_tray_remain, _bridge_state_dirty
     env = parse_ams_environment(data)
     if env and env != ams_environment:
@@ -748,6 +924,12 @@ def on_message(client, userdata, msg):
     if remain and remain != ams_tray_remain:
         ams_tray_remain = remain
         _bridge_state_dirty = True
+        sync_remain_to_spoolman()
+
+    # Parse AMS trays
+    ams = parse_ams_trays(data)
+    if ams:
+        handle_ams_change(ams)
 
     # Parse live printer telemetry
     global printer_telemetry, print_start_time
@@ -840,6 +1022,8 @@ def main():
     except Exception as e:
         log.error(f"Cannot reach Spoolman at {SPOOLMAN_URL}: {e}")
         sys.exit(1)
+
+    ensure_extra_fields()
 
     # Set up MQTT client
     mqtt_client = mqtt.Client(
