@@ -170,9 +170,9 @@ header h1 span { color: var(--accent); }
 /* ── KPI Row ────────────────────────────────────────────────── */
 .kpi-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin-bottom: 24px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 20px;
 }
 .kpi {
   background: var(--bg-panel);
@@ -230,6 +230,27 @@ header h1 span { color: var(--accent); }
   flex-shrink: 0;
 }
 .spool-info { flex: 1; min-width: 0; }
+.spool-card { position: relative; }
+.brand-logo {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 18px;
+  height: 18px;
+  opacity: 0.35;
+}
+.brand-logo img { width: 100%; height: 100%; object-fit: contain; filter: invert(1); }
+[data-theme="light"] .brand-logo img { filter: none; }
+.brand-initial {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  opacity: 0.35;
+}
 .spool-name {
   font-weight: 600;
   font-size: 0.9rem;
@@ -420,17 +441,19 @@ input::placeholder { color: var(--text-dim); }
   height: 32px;
   border-radius: 4px;
   border: 2px solid var(--border);
+  flex-shrink: 0;
 }
+/* color swatch CSS removed — using existing filament grid now */
 
 /* ── Log Output ─────────────────────────────────────────────── */
 .log-output {
   background: var(--bg-base);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 6px 8px;
   font-family: var(--mono);
   font-size: 0.78rem;
-  line-height: 1.7;
+  line-height: 1.3;
   max-height: 400px;
   overflow-y: auto;
   white-space: pre-wrap;
@@ -599,7 +622,7 @@ input::placeholder { color: var(--text-dim); }
   .shell { padding: 0 16px 40px; }
   .form-grid { grid-template-columns: 1fr; }
   .spool-grid { grid-template-columns: 1fr; }
-  .kpi-row { grid-template-columns: 1fr 1fr; }
+  .kpi-row { grid-template-columns: repeat(2, 1fr); }
   header h1 { font-size: 1rem; }
   .usage-label { width: 100px; }
 }
@@ -668,6 +691,30 @@ input::placeholder { color: var(--text-dim); }
   display: flex; flex-direction: column; align-items: center; justify-content: center;
 }
 
+/* ── Live Print Status ─────────────────────────────────────── */
+.print-live { background: var(--bg-panel); border: 1px solid var(--accent); border-radius: var(--radius); padding: 14px 18px; margin-bottom: 16px; }
+.print-live-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.print-live-title { font-weight: 600; font-size: 0.9rem; }
+.print-live-state { font-family: var(--mono); font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; }
+.print-live-state.running { background: var(--green-dim); color: var(--green); }
+.print-live-state.paused { background: var(--yellow-dim); color: var(--yellow); }
+.print-live-state.prepare { background: var(--accent-dim); color: var(--accent); }
+.print-live-state.idle { background: var(--bg-input); color: var(--text-muted); }
+.print-live-state.failed { background: var(--red-dim); color: var(--red); }
+.print-live-state.finish { background: var(--green-dim); color: var(--green); }
+.print-live-progress { margin-bottom: 10px; }
+.print-live-bar { width: 100%; height: 8px; background: var(--bg-input); border-radius: 4px; overflow: hidden; }
+.print-live-bar-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.5s ease; }
+.print-live-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.print-live-stat { text-align: center; }
+.print-live-stat .stat-value { font-family: var(--mono); font-size: 1rem; font-weight: 600; }
+.print-live-stat .stat-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.tray-remain { font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; }
+
+/* ── Print History Analytics ──────────────────────────────────── */
+.print-analytics { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 16px; }
+.print-analytics .kpi { padding: 12px; }
+
 /* ── Print History Entries ──────────────────────────────────── */
 .print-entry {
   display: flex; align-items: center; gap: 12px; padding: 12px 16px;
@@ -676,6 +723,7 @@ input::placeholder { color: var(--text-dim); }
 }
 .print-entry .print-swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--border); flex-shrink: 0; }
 .print-entry .print-info { flex: 1; min-width: 0; }
+.print-entry .print-job-name { font-size: 0.8rem; font-weight: 600; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .print-entry .print-name { font-weight: 500; font-size: 0.85rem; }
 .print-entry .print-meta { font-size: 0.75rem; color: var(--text-muted); }
 .print-entry .print-grams { font-family: var(--mono); font-size: 0.85rem; font-weight: 500; color: var(--accent); white-space: nowrap; }
@@ -769,35 +817,34 @@ input::placeholder { color: var(--text-dim); }
     <button class="tab" data-panel="vendors" role="tab">Vendors</button>
     <button class="tab" data-panel="history" role="tab">Print History</button>
     <button class="tab" data-panel="tools" role="tab">Tools</button>
+    <button class="tab" data-panel="settings" role="tab">Settings</button>
   </nav>
 
   <!-- ═══ Dashboard ═══ -->
   <div class="panel active" id="panel-dashboard">
-    <!-- KPI Cards -->
-    <div class="kpi-row" id="dashboard-kpis"></div>
+    <!-- Live Print Status -->
+    <div id="print-live-panel" style="display:none;"></div>
 
     <!-- AMS 2 Pro -->
     <div class="section-header">
       <span class="section-title">AMS 2 Pro</span>
       <span class="muted" id="ams-environment" style="font-size:0.78rem;"></span>
     </div>
-    <div id="tray-strip" style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr 1fr; gap:8px; margin-bottom:28px;"></div>
+    <div id="tray-strip" style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr 1fr; gap:8px; margin-bottom:20px;"></div>
 
     <div id="unknown-spools-alert" style="margin-bottom:16px;"></div>
 
-    <!-- Filament Usage -->
-    <div class="section-header"><span class="section-title">Filament Usage</span></div>
-    <div class="usage-chart" id="usage-chart"></div>
-
-    <!-- Activity + Low Stock -->
+    <!-- Activity | Low Stock + Usage -->
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
       <div>
         <div class="section-header"><span class="section-title">Recent Activity</span><a href="#" onclick="event.preventDefault();clearActivity()" class="detail-link" style="font-size:0.72rem;margin-left:8px;">Clear</a></div>
-        <div class="log-output" id="activity-feed" style="max-height:280px;">No events yet.</div>
+        <div class="log-output" id="activity-feed" style="max-height:400px;">No events yet.</div>
       </div>
       <div>
         <div class="section-header"><span class="section-title" id="low-stock-title">Low Stock</span></div>
         <div id="low-stock-list"></div>
+        <div class="section-header" style="margin-top:16px;"><span class="section-title">Filament Usage</span></div>
+        <div class="usage-chart" id="usage-chart"></div>
       </div>
     </div>
   </div>
@@ -847,8 +894,9 @@ input::placeholder { color: var(--text-dim); }
 
   <!-- ═══ Add Spool ═══ -->
   <div class="panel" id="panel-add">
-    <div class="card" style="max-width: 600px;">
-      <h3 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 20px;">New Spool</h3>
+    <!-- New Filament + Spool -->
+    <div class="card">
+      <h3 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 16px;">New Spool</h3>
       <form id="add-form" class="form-grid">
         <div class="form-group">
           <label class="form-label" for="add-brand">Brand</label>
@@ -859,17 +907,20 @@ input::placeholder { color: var(--text-dim); }
         </div>
         <div class="form-group">
           <label class="form-label" for="add-material">Material</label>
-          <select id="add-material"></select>
+          <input type="text" id="add-material" placeholder="PLA, PETG HF, ABS..." list="add-material-list">
+          <datalist id="add-material-list"></datalist>
         </div>
         <div class="form-group">
-          <label class="form-label" for="add-color-preset">Color</label>
-          <div class="color-preview">
-            <select id="add-color-preset" style="flex:1;">
-              <option value="">— select color —</option>
-            </select>
+          <label class="form-label">Color</label>
+          <div style="display:flex; gap:8px; align-items:center;">
             <div class="color-dot" id="add-color-preview"></div>
+            <span class="muted">#</span>
+            <input type="text" id="add-color-hex" placeholder="FF5733" maxlength="6" style="width:100px; font-family:var(--mono);">
           </div>
-          <input type="hidden" id="add-color-hex">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="add-color-name">Color Name</label>
+          <input type="text" id="add-color-name" placeholder="e.g. Dark Green Gray">
         </div>
         <div class="form-group">
           <label class="form-label" for="add-name">Filament Name (optional)</label>
@@ -885,20 +936,17 @@ input::placeholder { color: var(--text-dim); }
       </form>
     </div>
 
-    <div class="card" style="max-width: 600px; margin-top: 16px;">
-      <h3 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 8px;">Batch Add</h3>
-      <p class="muted" style="font-size: 0.78rem; margin-bottom: 12px;">
-        One spool per line: <span class="mono">Brand, Material, Color, Hex, Price</span><br>
-        Price is optional. Example: <span class="mono">Inland, PLA, Black, 000000, 18.99</span>
-      </p>
-      <textarea id="batch-input" style="width:100%; min-height:120px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); padding:10px; font-family:var(--mono); font-size:0.82rem; resize:vertical;" placeholder="Inland, PLA, Black, 000000, 18.99
-Inland, PLA, Red, ff0000
-Bambu, PETG HF, White, ffffff, 22.99"></textarea>
-      <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
-        <button class="btn btn-primary" id="btn-batch" onclick="batchAddSpools()">Create All</button>
-        <span class="muted" id="batch-status" style="font-size:0.8rem;"></span>
-      </div>
+    <!-- Re-buy existing filament -->
+    <div class="section-header" style="margin-top:28px;">
+      <span class="section-title">Re-buy Existing Filament</span>
     </div>
+    <p class="muted" style="font-size:0.78rem; margin-bottom:12px;">Tap to add another spool of something you already own.</p>
+    <div class="filter-bar" style="margin-bottom:12px;">
+      <input type="text" id="add-existing-search" placeholder="Search filaments..." style="flex:1; min-width:150px;">
+      <select id="add-existing-brand"><option value="">All Brands</option></select>
+      <select id="add-existing-material"><option value="">All Materials</option></select>
+    </div>
+    <div id="add-existing-grid" class="spool-grid"></div>
   </div>
 
   <!-- ═══ Filaments ═══ -->
@@ -934,6 +982,7 @@ Bambu, PETG HF, White, ffffff, 22.99"></textarea>
 
   <!-- ═══ Print History ═══ -->
   <div class="panel" id="panel-history">
+    <div class="print-analytics" id="print-analytics"></div>
     <div class="section-header"><span class="section-title">Print History</span></div>
     <div id="print-history-list"></div>
     <div class="empty" id="print-history-empty">No prints recorded yet. History appears after prints complete.</div>
@@ -973,6 +1022,41 @@ Bambu, PETG HF, White, ffffff, 22.99"></textarea>
       <div class="log-output" id="tool-log">Ready.</div>
     </div>
   </div>
+
+  <!-- ═══ Settings ═══ -->
+  <div class="panel" id="panel-settings">
+    <div class="card">
+      <h3 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 16px;">Configuration</h3>
+      <p class="muted" style="font-size: 0.78rem; margin-bottom: 20px;">Connection settings for your Bambu printer and Spoolman. Changes require a service restart to take effect.</p>
+      <form id="settings-form" class="form-grid">
+        <div class="form-group">
+          <label class="form-label" for="set-printer-ip">Printer IP</label>
+          <input type="text" id="set-printer-ip" placeholder="192.168.x.x">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="set-printer-serial">Printer Serial</label>
+          <input type="text" id="set-printer-serial" placeholder="e.g. 22E8AJ5C1000237">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="set-access-code">Access Code</label>
+          <input type="password" id="set-access-code" placeholder="LAN access code" autocomplete="off">
+          <span class="muted" style="font-size:0.7rem;">Find on printer touchscreen under Network → LAN Only Mode</span>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="set-spoolman-url">Spoolman URL <span class="dim">(internal)</span></label>
+          <input type="text" id="set-spoolman-url" placeholder="http://localhost:7912">
+        </div>
+        <div class="form-group full">
+          <label class="form-label" for="set-spoolman-public">Spoolman Public URL <span class="dim">(optional)</span></label>
+          <input type="text" id="set-spoolman-public" placeholder="Leave blank for auto-detect, or https://spoolman.yourdomain.com">
+        </div>
+        <div class="form-group full" style="margin-top: 8px; display:flex; gap:12px; align-items:center;">
+          <button type="submit" class="btn btn-primary">Save Settings</button>
+          <span class="muted" id="settings-status" style="font-size:0.8rem;"></span>
+        </div>
+      </form>
+    </div>
+  </div>
 </div>
 
 <!-- Toast -->
@@ -994,30 +1078,33 @@ let spoolBaseUrl = '';
 
 document.addEventListener('DOMContentLoaded', async () => {
   setupTabs();
-  setupCascadingDropdowns();
+  setupAddFilters();
   setupAddForm();
+  setupSettings();
 
   await loadSpools();
+  await loadFilamentCache();
   renderDashboard();
+  renderExistingFilaments();
   fetchActivity();
   renderSpools();
   renderTagSpools();
   checkBridge();
   fetchPrinterStatus();
 
-  // Auto-refresh spools every 5 seconds (1 API call)
+  // Auto-refresh spools + printer status every 5 seconds
   setInterval(async () => {
     if (document.querySelector('#panel-dashboard.active')) {
       await loadSpools();
       renderDashboard();
+      fetchPrinterStatus();
     }
   }, 5000);
 
-  // Activity feed + printer status on a slower 15-second interval
+  // Activity feed on a slower 15-second interval
   setInterval(() => {
     if (document.querySelector('#panel-dashboard.active')) {
       fetchActivity();
-      fetchPrinterStatus();
     }
   }, 15000);
 
@@ -1070,8 +1157,10 @@ function setupTabs() {
       tab.classList.add('active');
       document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
       if (tab.dataset.panel === 'history') { renderPrintHistory(); }
+      if (tab.dataset.panel === 'add') { loadFilamentCache().then(renderExistingFilaments); }
       if (tab.dataset.panel === 'filaments') { loadAndRenderFilaments(); }
       if (tab.dataset.panel === 'vendors') { loadAndRenderVendors(); }
+      if (tab.dataset.panel === 'settings') { loadSettings(); }
     });
   });
 }
@@ -1086,46 +1175,14 @@ function switchTab(panel) {
 // ═══════════════════════════════════════════════════════════════
 
 function renderDashboard() {
-  renderDashboardKpis();
   renderTrayStatusFromSpools();
-  renderUsageChart();
   renderLowStock();
+  renderUsageChart();
 }
 
 function isLowStock(s) {
   const w = s.remaining_weight || 0;
   return w > 0 && w < 200;
-}
-
-function renderDashboardKpis() {
-  let totalSpools = 0, totalWeightG = 0, totalValue = 0, lowCount = 0;
-  for (const s of spools) {
-    if (s.archived) continue;
-    totalSpools++;
-    totalWeightG += s.remaining_weight || 0;
-    totalValue += s.filament?.price || 0;
-    if (isLowStock(s)) lowCount++;
-  }
-  const totalWeightKg = (totalWeightG / 1000).toFixed(1);
-
-  document.getElementById('dashboard-kpis').innerHTML = `
-    <div class="kpi">
-      <div class="kpi-label">Total Spools</div>
-      <div class="kpi-value">${totalSpools}</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Total Filament</div>
-      <div class="kpi-value">${totalWeightKg}<span style="font-size:0.9rem; color:var(--text-muted);"> kg</span></div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Total Value</div>
-      <div class="kpi-value">$${totalValue.toFixed(0)}</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Low Stock</div>
-      <div class="kpi-value" style="${lowCount > 0 ? 'color:var(--yellow);' : ''}">${lowCount}</div>
-    </div>
-  `;
 }
 
 function renderTrayStatusFromSpools() {
@@ -1154,6 +1211,7 @@ function renderTrayStatusFromSpools() {
 
 function renderTrayStrip(trays) {
   const strip = document.getElementById('tray-strip');
+  const remain = (lastPrinterStatus.ams_tray_remain) || {};
   const slots = [
     { key: 'A1', label: 'Tray 1' },
     { key: 'A2', label: 'Tray 2' },
@@ -1166,6 +1224,9 @@ function renderTrayStrip(trays) {
     const t = trays[slot.key];
     const isExternal = slot.key === 'External';
     const borderStyle = isExternal ? 'border-color:var(--accent);' : '';
+    const amsRemain = remain[slot.key];
+    const remainHtml = (amsRemain !== undefined && !isExternal)
+      ? `<div class="tray-remain">${amsRemain}% remaining</div>` : '';
     if (t) {
       const pct = Math.round((t.remaining_weight / t.total_weight) * 100);
       const barColor = pct > 30 ? 'var(--green)' : pct > 10 ? 'var(--yellow)' : 'var(--red)';
@@ -1177,6 +1238,7 @@ function renderTrayStrip(trays) {
           <div class="tray-name">${escHtml(t.name)}</div>
           <div class="tray-meta">${escHtml(t.brand)}</div>
           <div class="tray-weight">${t.remaining_weight.toFixed(0)}g</div>
+          ${remainHtml}
           <div class="weight-bar" style="width:100%; margin-top:4px;">
             <div class="weight-bar-fill" style="width:${pct}%; background:${barColor};"></div>
           </div>
@@ -1190,6 +1252,7 @@ function renderTrayStrip(trays) {
           <div class="tray-label" style="${labelColor}">${slot.label}</div>
           <div class="tray-swatch" style="background:var(--bg-input); border-style:dashed;"></div>
           <div class="tray-meta" style="color:var(--text-dim);">Empty</div>
+          ${remainHtml}
           ${isExternal ? '<div style="margin-top:8px;"><a href="#" onclick="event.preventDefault();switchTab(\'spools\')" class="detail-link" style="font-size:0.72rem;">Browse spools to load</a></div>' : ''}
         </div>`;
     }
@@ -1209,22 +1272,45 @@ async function fetchActivity() {
       print_finish: 'var(--green)', print_failed: 'var(--red)',
       print_done: 'var(--green)',
       tray_load: 'var(--blue)', external_tap: 'var(--accent)',
+      external_load: 'var(--accent)',
+    };
+    const typeLabels = {
+      tray_load: 'Loaded', print_done: 'Print', external_tap: 'NFC Tap',
+      external_load: 'External',
     };
     el.innerHTML = events.slice(0, 20).map(e => {
       const dot = dotColors[e.type] || 'var(--text-dim)';
-      const time = (e.ts || '').split('T')[1] || '';
+      const rawTime = (e.ts || '').split('T')[1] || '';
+      let timeStr = rawTime;
+      const hm = rawTime.match(/^(\d{2}):(\d{2})/);
+      if (hm) {
+        let h = parseInt(hm[1]), m = hm[2];
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        h = h % 12 || 12;
+        timeStr = `${h}:${m} ${ampm}`;
+      }
+      const label = typeLabels[e.type] || e.type;
+      const tray = e.tray ? `<span style="font-weight:500;">${escHtml(e.tray)}</span> ` : '';
       const name = e.spool_name || '';
-      const detail = e.detail || '';
-      return `<div><span style="color:var(--text-dim);">${escHtml(time)}</span> <span style="color:${dot};">●</span> ${escHtml(name)} ${escHtml(detail)}</div>`;
+      const detail = e.detail ? `<br><span style="font-size:0.7rem;color:var(--text-dim);">${escHtml(e.detail)}</span>` : '';
+      return `<div style="display:flex;align-items:flex-start;gap:6px;padding:2px 0;font-size:0.78rem;line-height:1.3;border-bottom:1px solid var(--border);">
+        <span style="color:${dot};font-size:0.5rem;line-height:1.3;margin-top:3px;">●</span>
+        <span style="flex:1;min-width:0;">${tray}<span style="color:var(--text-muted);">${escHtml(label)}</span> ${escHtml(name)}${detail}</span>
+        <span style="color:var(--text-dim);font-size:0.7rem;white-space:nowrap;">${escHtml(timeStr)}</span>
+      </div>`;
     }).join('');
   } catch(e) {
     console.error('Failed to fetch activity', e);
   }
 }
 
+let lastPrinterStatus = {};
+
 async function fetchPrinterStatus() {
   try {
     const status = await api('/api/printer-status');
+    lastPrinterStatus = status;
+
     const envEl = document.getElementById('ams-environment');
     if (status.ams_environment && (status.ams_environment.humidity || status.ams_environment.temp)) {
       const h = status.ams_environment.humidity;
@@ -1255,7 +1341,96 @@ async function fetchPrinterStatus() {
     if (status.connected) {
       bridgeEl.innerHTML = '<span class="status-dot on"></span><span class="green">connected</span>';
     }
+
+    renderLivePrint(status.printer || {});
   } catch(e) {}
+}
+
+function formatDuration(seconds) {
+  if (!seconds || seconds <= 0) return '--';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function formatMinutes(mins) {
+  if (!mins || mins <= 0) return '--';
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+const SPEED_NAMES = { 1: 'Silent', 2: 'Normal', 3: 'Sport', 4: 'Ludicrous' };
+
+function renderLivePrint(p) {
+  const panel = document.getElementById('print-live-panel');
+  if (!p || !p.gcode_state || p.gcode_state === 'IDLE') {
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.style.display = 'block';
+  const state = p.gcode_state;
+  const stateClass = state === 'RUNNING' ? 'running'
+    : state === 'PAUSE' ? 'paused'
+    : state === 'PREPARE' ? 'prepare'
+    : state === 'FAILED' ? 'failed'
+    : state === 'FINISH' ? 'finish'
+    : 'idle';
+  const stateLabel = state === 'RUNNING' ? 'Printing'
+    : state === 'PAUSE' ? 'Paused'
+    : state === 'PREPARE' ? 'Preparing'
+    : state === 'FAILED' ? 'Failed'
+    : state === 'FINISH' ? 'Complete'
+    : state;
+
+  const pct = p.percent || 0;
+  const speedName = SPEED_NAMES[p.spd_lvl] || `Lvl ${p.spd_lvl}`;
+  const fanPct = (v) => { const n = parseInt(v); return isNaN(n) ? '--' : Math.round(n / 15 * 100) + '%'; };
+  const trayLabel = p.tray_now || '--';
+
+  panel.innerHTML = `
+    <div class="print-live">
+      <div class="print-live-header">
+        <div class="print-live-title">${escHtml(p.subtask_name || 'Print Job')}</div>
+        <span class="print-live-state ${stateClass}">${stateLabel}</span>
+      </div>
+      <div class="print-live-progress">
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+          <span style="font-family:var(--mono); font-size:0.85rem; font-weight:600;">${pct}%</span>
+          <span style="font-size:0.78rem; color:var(--text-muted);">Layer ${p.layer_num}/${p.total_layer_num} · ETA ${formatMinutes(p.remain_time)} · Elapsed ${formatDuration(p.print_elapsed)}</span>
+        </div>
+        <div class="print-live-bar"><div class="print-live-bar-fill" style="width:${pct}%;"></div></div>
+      </div>
+      <div class="print-live-stats">
+        <div class="print-live-stat">
+          <div class="stat-value">${p.nozzle_temper.toFixed(0)}° <span style="font-size:0.7rem;color:var(--text-muted);">/ ${p.nozzle_target.toFixed(0)}°</span></div>
+          <div class="stat-label">Nozzle</div>
+        </div>
+        <div class="print-live-stat">
+          <div class="stat-value">${p.bed_temper.toFixed(0)}° <span style="font-size:0.7rem;color:var(--text-muted);">/ ${p.bed_target.toFixed(0)}°</span></div>
+          <div class="stat-label">Bed</div>
+        </div>
+        <div class="print-live-stat">
+          <div class="stat-value">${speedName}</div>
+          <div class="stat-label">Speed</div>
+        </div>
+        <div class="print-live-stat">
+          <div class="stat-value">${fanPct(p.cooling_fan)}</div>
+          <div class="stat-label">Part Fan</div>
+        </div>
+        <div class="print-live-stat">
+          <div class="stat-value">${fanPct(p.big_fan1)}</div>
+          <div class="stat-label">Aux Fan</div>
+        </div>
+        <div class="print-live-stat">
+          <div class="stat-value">${escHtml(trayLabel)}</div>
+          <div class="stat-label">Feeding</div>
+        </div>
+      </div>
+    </div>`;
 }
 
 async function linkUnknownSpool(tagUid, type, color, tray) {
@@ -1303,6 +1478,22 @@ function renderLowStock() {
 // Spool Rendering
 // ═══════════════════════════════════════════════════════════════
 
+const BRAND_LOGOS = {
+  'bambu': '/static/logos/bambu-lab.png',
+  'inland': '/static/logos/inland.png',
+};
+
+function brandLogo(brandName) {
+  const b = (brandName || '').toLowerCase();
+  for (const [key, src] of Object.entries(BRAND_LOGOS)) {
+    if (b.includes(key)) {
+      return `<div class="brand-logo"><img src="${src}" alt="${brandName}"></div>`;
+    }
+  }
+  const initial = (brandName || '?')[0].toUpperCase();
+  return `<div class="brand-initial">${initial}</div>`;
+}
+
 function spoolCard(s, selectable = false, expandable = false) {
   const f = s.filament || {};
   const color = f.color_hex || '333';
@@ -1326,6 +1517,7 @@ function spoolCard(s, selectable = false, expandable = false) {
 
   let html = `
     <div class="spool-card${selected}${archivedClass}"${onclick}>
+      ${brandLogo(brand)}
       <div class="spool-swatch" style="background:#${color};"></div>
       <div class="spool-info">
         <div class="spool-name">${escHtml(name)}${tagBadgeHtml}</div>
@@ -1677,174 +1869,105 @@ document.addEventListener('DOMContentLoaded', () => {
 // Add Spool
 // ═══════════════════════════════════════════════════════════════
 
-const COLOR_CATALOG = {
-  bambu: {
-    "PLA Basic": [
-      {n:"Jade White",hex:"FFFFFF"},{n:"Beige",hex:"F7E6DE"},{n:"Light Gray",hex:"D1D3D5"},
-      {n:"Blue Gray",hex:"5B6579"},{n:"Gray",hex:"8E9089"},{n:"Dark Gray",hex:"545454"},
-      {n:"Silver",hex:"A6A9AA"},{n:"Gold",hex:"E4BD68"},{n:"Bronze",hex:"847D48"},
-      {n:"Brown",hex:"9D432C"},{n:"Cocoa Brown",hex:"6F5034"},{n:"Indigo Purple",hex:"482960"},
-      {n:"Purple",hex:"5E43B7"},{n:"Cobalt Blue",hex:"0056B8"},{n:"Blue",hex:"0A2989"},
-      {n:"Cyan",hex:"0086D6"},{n:"Turquoise",hex:"00B1B7"},{n:"Mistletoe Green",hex:"3F8E43"},
-      {n:"Bambu Green",hex:"00AE42"},{n:"Bright Green",hex:"BECF00"},{n:"Yellow",hex:"F4EE2A"},
-      {n:"Sunflower Yellow",hex:"FEC600"},{n:"Pumpkin Orange",hex:"FF9016"},{n:"Orange",hex:"FF6A13"},
-      {n:"Hot Pink",hex:"F5547C"},{n:"Pink",hex:"F55A74"},{n:"Magenta",hex:"EC008C"},
-      {n:"Maroon Red",hex:"9D2235"},{n:"Red",hex:"C12E1F"},{n:"Black",hex:"000000"}
-    ],
-    "PLA Matte": [
-      {n:"Ivory White",hex:"FFFFFF"},{n:"Bone White",hex:"CBC6B8"},{n:"Latte Brown",hex:"D3B7A7"},
-      {n:"Desert Tan",hex:"E8DBB7"},{n:"Caramel",hex:"AE835B"},{n:"Dark Brown",hex:"7D6556"},
-      {n:"Dark Chocolate",hex:"4D3324"},{n:"Nardo Gray",hex:"757575"},{n:"Ash Gray",hex:"9B9EA0"},
-      {n:"Lilac Purple",hex:"AE96D4"},{n:"Plum",hex:"950051"},{n:"Marine Blue",hex:"0078BF"},
-      {n:"Dark Blue",hex:"042F56"},{n:"Sky Blue",hex:"56B7E6"},{n:"Ice Blue",hex:"A3D8E1"},
-      {n:"Dark Green",hex:"68724D"},{n:"Grass Green",hex:"61C680"},{n:"Apple Green",hex:"C2E189"},
-      {n:"Lemon Yellow",hex:"F7D959"},{n:"Mandarin Orange",hex:"F99963"},{n:"Terracotta",hex:"B15533"},
-      {n:"Sakura Pink",hex:"E8AFCF"},{n:"Scarlet Red",hex:"DE4343"},{n:"Dark Red",hex:"BB3D43"},
-      {n:"Charcoal",hex:"000000"}
-    ],
-    "PLA+": [
-      {n:"White",hex:"FFFFFF"},{n:"Silver",hex:"959698"},{n:"Gray",hex:"AFB1AE"},
-      {n:"Cyan",hex:"009BD8"},{n:"Yellow",hex:"F4D53F"},{n:"Orange",hex:"DC3A27"},
-      {n:"Black",hex:"000000"}
-    ],
-    "PLA Silk": [
-      {n:"White",hex:"FFFFFF"},{n:"Silver",hex:"EAECEB"},{n:"Copper",hex:"5E4B3C"},
-      {n:"Gold",hex:"E5B03D"},{n:"Pink",hex:"EEB1C1"},{n:"Purple",hex:"854CE4"},
-      {n:"Blue",hex:"147BD1"},{n:"Green",hex:"4CE4A0"}
-    ],
-    "PLA-CF": [
-      {n:"Black",hex:"000000"},{n:"Lava Gray",hex:"4D5054"},{n:"Jeans Blue",hex:"6E88BC"},
-      {n:"Royal Blue",hex:"2842AD"},{n:"Iris Purple",hex:"69398E"},{n:"Matcha Green",hex:"5C9748"},
-      {n:"Burgundy Red",hex:"951E23"}
-    ],
-    "PETG Basic": [
-      {n:"White",hex:"FFFFFF"},{n:"Nature",hex:"F9F7F2"},{n:"Gray",hex:"9EA2A2"},
-      {n:"Blue Gray",hex:"688197"},{n:"Gold",hex:"B28B33"},{n:"Purple",hex:"9E007E"},
-      {n:"Lake Blue",hex:"0069B1"},{n:"Blue",hex:"001489"},{n:"Green",hex:"009639"},
-      {n:"Lime Green",hex:"7CD82B"},{n:"Yellow",hex:"FCE300"},{n:"Orange",hex:"FF671F"},
-      {n:"Red",hex:"D6001C"},{n:"Black",hex:"000000"}
-    ],
-    "PETG HF": [
-      {n:"White",hex:"FFFFFF"},{n:"Cream",hex:"F9DFB9"},{n:"Gray",hex:"ADB1B2"},
-      {n:"Dark Gray",hex:"515151"},{n:"Peanut Brown",hex:"875718"},{n:"Forest Green",hex:"39541A"},
-      {n:"Lime Green",hex:"6EE53C"},{n:"Green",hex:"00AE42"},{n:"Lake Blue",hex:"1F79E5"},
-      {n:"Blue",hex:"002E96"},{n:"Yellow",hex:"FFD00B"},{n:"Orange",hex:"F75403"},
-      {n:"Red",hex:"EB3A3A"},{n:"Black",hex:"000000"}
-    ],
-    "PETG-CF": [
-      {n:"Black",hex:"000000"},{n:"Titan Gray",hex:"565656"},{n:"Indigo Blue",hex:"324585"},
-      {n:"Malachite Green",hex:"16B08E"},{n:"Violet Purple",hex:"583061"},{n:"Brick Red",hex:"9F332A"}
-    ],
-    "ABS": [
-      {n:"White",hex:"FFFFFF"},{n:"Silver",hex:"87909A"},{n:"Beige",hex:"DFD1A7"},
-      {n:"Lavender",hex:"7248BD"},{n:"Azure",hex:"489FDF"},{n:"Navy Blue",hex:"0C2340"},
-      {n:"Blue",hex:"0A2CA5"},{n:"Olive",hex:"789D4A"},{n:"Mint",hex:"7AE1BF"},
-      {n:"Bambu Green",hex:"00AE42"},{n:"Yellow",hex:"FCE900"},{n:"Tangerine Yellow",hex:"FFC72C"},
-      {n:"Orange",hex:"FF6A13"},{n:"Red",hex:"D32941"},{n:"Purple",hex:"AF1685"},
-      {n:"Black",hex:"000000"}
-    ],
-    "ASA": [
-      {n:"White",hex:"FFFAF2"},{n:"Gray",hex:"8A949E"},{n:"Green",hex:"00A6A0"},
-      {n:"Blue",hex:"2140B4"},{n:"Red",hex:"E02928"},{n:"Black",hex:"000000"}
-    ],
-    "TPU": [
-      {n:"White",hex:"FFFFFF"},{n:"Gray",hex:"898D8D"},{n:"Blue",hex:"0072CE"},
-      {n:"Red",hex:"C8102E"},{n:"Yellow",hex:"F3E600"},{n:"Black",hex:"101820"}
-    ],
-    "PA": [
-      {n:"White",hex:"EAEAE4"},{n:"Yellow",hex:"FFCE00"},{n:"Lime",hex:"C5ED48"},
-      {n:"Orange",hex:"FF4800"},{n:"Blue",hex:"75AED8"},{n:"Brown",hex:"5B492F"},
-      {n:"Gray",hex:"353533"},{n:"Black",hex:"000000"}
-    ],
-    "PA-CF": [{n:"Black",hex:"000000"}],
-    "PC": [
-      {n:"Transparent",hex:"F5F5F5"},{n:"White",hex:"FFFFFF"},
-      {n:"Clear Black",hex:"5A5161"},{n:"Black",hex:"000000"}
-    ],
-    "PVA": [{n:"Natural",hex:"F0F1A8"}],
-    "Support W": [{n:"Nature",hex:"FFFFFF"},{n:"Black",hex:"000000"}]
-  },
-  inland: {
-    "PLA": [
-      {n:"White",hex:"E0E3E3"},{n:"Bone White",hex:"ABA18F"},{n:"Wood",hex:"DEB98F"},
-      {n:"Grey",hex:"6F7983"},{n:"Silver",hex:"8A8F92"},{n:"Gold",hex:"D7B536"},
-      {n:"Light Blue",hex:"3CA4B8"},{n:"Egyptian Blue",hex:"075AAC"},{n:"Blue",hex:"044482"},
-      {n:"Green",hex:"407166"},{n:"Military Green",hex:"5B6D37"},{n:"Glass Yellow",hex:"D0D764"},
-      {n:"Coral",hex:"C16062"},{n:"Pink",hex:"FC97AF"},{n:"Purple",hex:"6F5793"},
-      {n:"Red",hex:"C43220"},{n:"True Red",hex:"B13137"},{n:"Matte Orange",hex:"ED9344"},
-      {n:"Black",hex:"27272C"}
-    ],
-    "PLA+": [
-      {n:"White",hex:"FFFFFF"},{n:"Bone White",hex:"ABA18F"},{n:"Silver",hex:"868A8B"},
-      {n:"Dark Blue",hex:"2C3353"},{n:"Blue",hex:"054990"},{n:"Light Blue",hex:"079FBF"},
-      {n:"Pink",hex:"F291A4"},{n:"Magenta",hex:"DE2B60"},{n:"Orange",hex:"FB8B5A"},
-      {n:"Yellow",hex:"F8D008"},{n:"Black",hex:"2B272B"}
-    ],
-    "PETG": [
-      {n:"White",hex:"EEEEEE"},{n:"Transparent",hex:"D1D6D1"},{n:"Blue",hex:"084480"},
-      {n:"Green",hex:"2B783E"},{n:"Magenta",hex:"E14170"},{n:"Red",hex:"CB4847"},
-      {n:"True Red",hex:"97392B"},{n:"Black",hex:"1A1A1A"}
-    ],
-    "ABS": [
-      {n:"White",hex:"E8E8E4"},{n:"Gray",hex:"8A8F8A"},{n:"Blue",hex:"1A4A8A"},
-      {n:"Green",hex:"3A7A40"},{n:"Yellow",hex:"F0D020"},{n:"Orange",hex:"E8712F"},
-      {n:"Red",hex:"B82828"},{n:"Black",hex:"1A1A1A"}
-    ],
-    "TPU": [
-      {n:"Natural",hex:"E8EDE8"},{n:"Translucent Green",hex:"80CC03"},
-      {n:"Translucent Purple",hex:"9B72B0"},{n:"Black",hex:"1A1A1A"}
-    ]
+function renderExistingFilaments() {
+  const grid = document.getElementById('add-existing-grid');
+  const search = (document.getElementById('add-existing-search')?.value || '').toLowerCase();
+  const brandFilter = document.getElementById('add-existing-brand')?.value || '';
+  const matFilter = document.getElementById('add-existing-material')?.value || '';
+
+  const filaments = (window._filamentCache || []).slice();
+
+  // Populate filter dropdowns (only once)
+  const brands = [...new Set(filaments.map(f => (f.vendor?.name || '')).filter(Boolean))].sort();
+  const materials = [...new Set(filaments.map(f => f.material || '').filter(Boolean))].sort();
+  const brandSel = document.getElementById('add-existing-brand');
+  const matSel = document.getElementById('add-existing-material');
+  if (brandSel.options.length <= 1) {
+    const cur = brandSel.value;
+    brandSel.innerHTML = '<option value="">All Brands</option>' + brands.map(b => `<option>${b}</option>`).join('');
+    brandSel.value = cur;
   }
-};
-
-function getMaterials(brand) {
-  return Object.keys(COLOR_CATALOG[brand] || {});
-}
-
-function getColors(brand, material) {
-  return (COLOR_CATALOG[brand] || {})[material] || [];
-}
-
-function populateMaterials() {
-  const brand = document.getElementById('add-brand').value;
-  const matSel = document.getElementById('add-material');
-  const mats = getMaterials(brand);
-  matSel.innerHTML = mats.map(m => `<option>${m}</option>`).join('');
-  populateColors();
-}
-
-function populateColors() {
-  const brand = document.getElementById('add-brand').value;
-  const material = document.getElementById('add-material').value;
-  const colorSel = document.getElementById('add-color-preset');
-  const colors = getColors(brand, material);
-
-  let html = '<option value="">— select color —</option>';
-  for (const c of colors) {
-    html += `<option value="${c.hex}" data-name="${c.n}">${c.n}</option>`;
+  if (matSel.options.length <= 1) {
+    const cur = matSel.value;
+    matSel.innerHTML = '<option value="">All Materials</option>' + materials.map(m => `<option>${m}</option>`).join('');
+    matSel.value = cur;
   }
-  colorSel.innerHTML = html;
 
-  document.getElementById('add-color-hex').value = '';
-  document.getElementById('add-color-preview').style.background = 'var(--bg-input)';
+  // Populate material datalist for new filament form
+  const datalist = document.getElementById('add-material-list');
+  if (datalist) datalist.innerHTML = materials.map(m => `<option value="${m}">`).join('');
+
+  let filtered = filaments;
+  if (search) filtered = filtered.filter(f =>
+    (f.name || '').toLowerCase().includes(search) ||
+    (f.material || '').toLowerCase().includes(search) ||
+    (f.vendor?.name || '').toLowerCase().includes(search)
+  );
+  if (brandFilter) filtered = filtered.filter(f => (f.vendor?.name || '') === brandFilter);
+  if (matFilter) filtered = filtered.filter(f => (f.material || '') === matFilter);
+
+  filtered.sort((a, b) => (a.vendor?.name || '').localeCompare(b.vendor?.name || '') || (a.material || '').localeCompare(b.material || '') || (a.name || '').localeCompare(b.name || ''));
+
+  if (filtered.length === 0) {
+    grid.innerHTML = '<div class="empty">No filaments found. Create one below.</div>';
+    return;
+  }
+
+  grid.innerHTML = filtered.map(f => {
+    const color = f.color_hex || '333';
+    const brand = f.vendor?.name || '';
+    const logo = brandLogo(brand);
+    const price = f.price ? `$${f.price.toFixed(2)}` : '';
+    return `
+      <div class="spool-card" onclick="addSpoolFromFilament(${f.id})" style="cursor:pointer;">
+        ${logo}
+        <div class="spool-swatch" style="background:#${color};"></div>
+        <div class="spool-info">
+          <div class="spool-name">${escHtml(f.name || 'Unnamed')}</div>
+          <div class="spool-meta">${escHtml(brand)} · ${escHtml(f.material || '?')}${price ? ' · ' + price : ''}</div>
+        </div>
+      </div>`;
+  }).join('');
 }
 
-function onColorPresetChange() {
-  const sel = document.getElementById('add-color-preset');
-  if (sel.value) {
-    document.getElementById('add-color-hex').value = sel.value;
-    document.getElementById('add-color-preview').style.background = `#${sel.value}`;
-  } else {
-    document.getElementById('add-color-hex').value = '';
-    document.getElementById('add-color-preview').style.background = 'var(--bg-input)';
+async function addSpoolFromFilament(filamentId) {
+  try {
+    const result = await api(`/api/spools/from-filament/${filamentId}`, { method: 'POST' });
+    if (result.id) {
+      toast(`Spool #${result.id} created`, 'success');
+      await loadSpools();
+      renderDashboard();
+      renderSpools();
+      renderTagSpools();
+    } else {
+      toast('Failed to create spool', 'error');
+    }
+  } catch(err) {
+    toast('Error: ' + err.message, 'error');
   }
 }
 
-function setupCascadingDropdowns() {
-  document.getElementById('add-brand').addEventListener('change', populateMaterials);
-  document.getElementById('add-material').addEventListener('change', populateColors);
-  document.getElementById('add-color-preset').addEventListener('change', onColorPresetChange);
-  populateMaterials(); // initialize
+async function loadFilamentCache() {
+  try {
+    window._filamentCache = await api('/api/filaments');
+  } catch(e) {
+    window._filamentCache = [];
+  }
+}
+
+function setupAddFilters() {
+  ['add-existing-search', 'add-existing-brand', 'add-existing-material'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', renderExistingFilaments);
+    if (el) el.addEventListener('change', renderExistingFilaments);
+  });
+  document.getElementById('add-color-hex')?.addEventListener('input', function() {
+    const hex = this.value.replace('#', '').slice(0, 6);
+    this.value = hex;
+    if (hex.length >= 3) {
+      document.getElementById('add-color-preview').style.background = `#${hex}`;
+    }
+  });
 }
 
 function setupAddForm() {
@@ -1855,9 +1978,7 @@ function setupAddForm() {
     btn.innerHTML = '<span class="spinner"></span> Creating...';
 
     try {
-      const presetSel = document.getElementById('add-color-preset');
-      const presetOpt = presetSel.options[presetSel.selectedIndex];
-      const colorName = presetOpt && presetOpt.dataset.name ? presetOpt.dataset.name : '';
+      const colorName = document.getElementById('add-color-name').value.trim();
       const data = {
         brand: document.getElementById('add-brand').value,
         material: document.getElementById('add-material').value,
@@ -1872,8 +1993,9 @@ function setupAddForm() {
       if (result.id) {
         toast(`Spool #${result.id} created`, 'success');
         e.target.reset();
-        populateMaterials();
         document.getElementById('add-color-preview').style.background = 'var(--bg-input)';
+        await loadFilamentCache();
+        renderExistingFilaments();
         await loadSpools();
         renderDashboard();
         renderSpools();
@@ -1885,72 +2007,60 @@ function setupAddForm() {
       toast('Error: ' + err.message, 'error');
     } finally {
       btn.disabled = false;
-      btn.textContent = 'Create Spool';
+      btn.textContent = 'Create Filament + Spool';
     }
   });
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Batch Add
+// Settings
 // ═══════════════════════════════════════════════════════════════
 
-async function batchAddSpools() {
-  const textarea = document.getElementById('batch-input');
-  const btn = document.getElementById('btn-batch');
-  const status = document.getElementById('batch-status');
-  const lines = textarea.value.trim().split('\n').filter(l => l.trim());
+async function loadSettings() {
+  try {
+    const s = await api('/api/settings');
+    document.getElementById('set-printer-ip').value = s.PRINTER_IP || '';
+    document.getElementById('set-printer-serial').value = s.PRINTER_SERIAL || '';
+    document.getElementById('set-access-code').value = s.PRINTER_ACCESS_CODE || '';
+    document.getElementById('set-access-code').placeholder = s.PRINTER_ACCESS_CODE ? 'Enter new code to change' : 'LAN access code';
+    document.getElementById('set-spoolman-url').value = s.SPOOLMAN_URL || '';
+    document.getElementById('set-spoolman-public').value = s.SPOOLMAN_PUBLIC_URL || '';
+  } catch(e) {
+    console.error('Failed to load settings', e);
+  }
+}
 
-  if (lines.length === 0) { toast('No lines to process', 'error'); return; }
-
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Creating...';
-  status.textContent = '';
-
-  let created = 0;
-  let errors = 0;
-
-  for (const line of lines) {
-    const parts = line.split(',').map(s => s.trim());
-    if (parts.length < 4) {
-      status.textContent = `Skipped invalid line: "${line}"`;
-      errors++;
-      continue;
-    }
-
-    const [brand, material, colorName, colorHex, price] = parts;
-    const brandKey = brand.toLowerCase().replace(/\s+/g, '');
+function setupSettings() {
+  document.getElementById('settings-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    const status = document.getElementById('settings-status');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Saving...';
+    status.textContent = '';
 
     try {
-      await api('/api/spools', {
-        method: 'POST',
-        body: {
-          brand: brandKey === 'bambulab' ? 'bambu' : brandKey,
-          material: material,
-          color_name: colorName,
-          color_hex: colorHex.replace('#', ''),
-          price: price || null,
-        },
-      });
-      created++;
-      status.textContent = `${created}/${lines.length} created...`;
-    } catch(e) {
-      errors++;
-      status.textContent = `Error on "${colorName}": ${e.message}`;
+      const data = {
+        PRINTER_IP: document.getElementById('set-printer-ip').value.trim(),
+        PRINTER_SERIAL: document.getElementById('set-printer-serial').value.trim(),
+        PRINTER_ACCESS_CODE: document.getElementById('set-access-code').value,
+        SPOOLMAN_URL: document.getElementById('set-spoolman-url').value.trim(),
+        SPOOLMAN_PUBLIC_URL: document.getElementById('set-spoolman-public').value.trim(),
+      };
+
+      const result = await api('/api/settings', { method: 'POST', body: data });
+      toast('Settings saved. Restart bridge to apply.', 'success');
+      status.textContent = 'Saved — restart required';
+      status.style.color = 'var(--green)';
+    } catch(err) {
+      toast('Failed to save: ' + err.message, 'error');
+      status.textContent = 'Save failed';
+      status.style.color = 'var(--red)';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Save Settings';
     }
-  }
-
-  btn.disabled = false;
-  btn.textContent = 'Create All';
-  status.textContent = `Done: ${created} created, ${errors} errors`;
-
-  if (created > 0) {
-    toast(`${created} spool${created > 1 ? 's' : ''} created`, 'success');
-    textarea.value = '';
-    await loadSpools();
-    renderDashboard();
-    renderSpools();
-    renderTagSpools();
-  }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2013,18 +2123,65 @@ async function renderPrintHistory() {
     const prints = await api('/api/prints');
     const list = document.getElementById('print-history-list');
     const empty = document.getElementById('print-history-empty');
+    const analyticsEl = document.getElementById('print-analytics');
+
+    // Analytics
+    const total = prints.length;
+    const successes = prints.filter(p => p.status !== 'failed').length;
+    const failures = total - successes;
+    const totalGrams = prints.reduce((sum, p) => sum + (p.grams_used || 0), 0);
+    const totalDuration = prints.reduce((sum, p) => sum + (p.duration || 0), 0);
+    const successRate = total > 0 ? Math.round((successes / total) * 100) : 0;
+
+    // Cost estimate: find spool prices from loaded spools data
+    let totalCost = 0;
+    for (const p of prints) {
+      if (p.grams_used > 0 && p.spool_id) {
+        const spool = spools.find(s => s.id === p.spool_id);
+        if (spool && spool.filament?.price && spool.filament?.weight) {
+          totalCost += (p.grams_used / spool.filament.weight) * spool.filament.price;
+        }
+      }
+    }
+
+    analyticsEl.innerHTML = total > 0 ? `
+      <div class="kpi">
+        <div class="kpi-label">Prints</div>
+        <div class="kpi-value">${total}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Success Rate</div>
+        <div class="kpi-value" style="${successRate < 80 && total > 2 ? 'color:var(--yellow);' : ''}">${successRate}%</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Filament Used</div>
+        <div class="kpi-value">${(totalGrams / 1000).toFixed(1)}<span style="font-size:0.9rem; color:var(--text-muted);"> kg</span></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Print Time</div>
+        <div class="kpi-value">${formatDuration(totalDuration)}</div>
+      </div>
+      ${totalCost > 0 ? `<div class="kpi">
+        <div class="kpi-label">Est. Cost</div>
+        <div class="kpi-value">$${totalCost.toFixed(2)}</div>
+      </div>` : ''}
+    ` : '';
+
     if (prints.length === 0) { list.innerHTML = ''; empty.style.display = 'block'; return; }
     empty.style.display = 'none';
     list.innerHTML = prints.map(p => {
       const date = (p.ts || '').replace('T', ' ');
       const statusClass = p.status === 'failed' ? ' print-status-failed' : '';
       const statusLabel = p.status === 'failed' ? ' (FAILED)' : '';
+      const printName = p.print_name ? `<div class="print-job-name">${escHtml(p.print_name)}</div>` : '';
+      const dur = p.duration ? `<span style="color:var(--text-muted);"> · ${formatDuration(p.duration)}</span>` : '';
       return `
         <div class="print-entry">
           <div class="print-swatch" style="background:#${p.color_hex || '333'};"></div>
           <div class="print-info">
+            ${printName}
             <div class="print-name${statusClass}">${escHtml(p.spool_name || 'Unknown')}${statusLabel}</div>
-            <div class="print-meta">${escHtml(p.material || '?')} · ${escHtml(date)}</div>
+            <div class="print-meta">${escHtml(p.material || '?')} · ${escHtml(date)}${dur}</div>
           </div>
           <div class="print-grams${statusClass}">-${(p.grams_used ?? 0).toFixed(1)}g</div>
         </div>`;
@@ -2098,7 +2255,18 @@ function renderUsageChart() {
     const remaining = s.remaining_weight || 0;
     const total = f.weight || 1000;
     const pct = total > 0 ? (remaining / total) * 100 : 100;
-    return { spool: s, remaining, total, pct, name: f.name || 'Unknown', color: f.color_hex || '666' };
+    // Include tray position if assigned, to disambiguate duplicates
+    const extra = s.extra || {};
+    let tray = (extra.active_tray || '').replace(/"/g, '').trim();
+    // Normalize old-format keys like "22E8AJ5C1000237_0_1" → "A2"
+    if (tray && tray.includes('_')) {
+      const parts = tray.split('_');
+      const idx = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(idx)) tray = `A${idx + 1}`;
+    }
+    let label = f.name || 'Unknown';
+    if (tray) label += ` (${tray})`;
+    return { spool: s, remaining, total, pct, name: label, color: f.color_hex || '666' };
   }).filter(item => item.pct < 100);
 
   withUsage.sort((a, b) => a.pct - b.pct);

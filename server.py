@@ -22,7 +22,7 @@ from flask import Flask, jsonify, request, send_from_directory
 import requests as http_requests
 
 from config import (
-    load_env, VALID_TRAYS, TRAY_EXTERNAL, LOCATION_AMS, LOCATION_STORAGE,
+    load_env, VALID_TRAYS, TRAY_EXTERNAL, LOCATION_AMS, LOCATION_STORAGE, LOCATION_EXTERNAL,
     tray_location, build_openspool_tag, extra_quote, extra_unquote,
 )
 
@@ -33,6 +33,7 @@ from config import (
 load_env()
 
 SPOOLMAN_URL = os.environ.get("SPOOLMAN_URL", "http://localhost:7912")
+SPOOLMAN_PUBLIC_URL = os.environ.get("SPOOLMAN_PUBLIC_URL", "")
 SCRIPTS_DIR = Path(__file__).parent
 BRIDGE_COMMANDS_PATH = SCRIPTS_DIR / "bridge_commands.json"
 PORT = int(os.environ.get("PORT", 5555))
@@ -138,6 +139,26 @@ def create_spool():
         "filament_id": filament_id,
         "remaining_weight": brand["net_weight"],
         "location": data.get("location", LOCATION_STORAGE),
+    }
+    sr = http_requests.post(f"{SPOOLMAN_URL}/api/v1/spool", json=spool_data)
+    return jsonify(sr.json())
+
+
+@app.route("/api/spools/from-filament/<int:filament_id>", methods=["POST"])
+def create_spool_from_filament(filament_id):
+    """Create a new spool from an existing filament."""
+    try:
+        r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/filament/{filament_id}")
+        r.raise_for_status()
+        fil = r.json()
+    except http_requests.exceptions.RequestException:
+        return jsonify({"error": "Filament not found"}), 404
+
+    weight = fil.get("weight") or 1000.0
+    spool_data = {
+        "filament_id": filament_id,
+        "remaining_weight": weight,
+        "location": LOCATION_STORAGE,
     }
     sr = http_requests.post(f"{SPOOLMAN_URL}/api/v1/spool", json=spool_data)
     return jsonify(sr.json())
@@ -410,9 +431,19 @@ def assign_tray(spool_id, tray_name=None):
     try:
         r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json=payload)
         r.raise_for_status()
-        return jsonify(r.json())
     except http_requests.exceptions.RequestException as e:
         return jsonify({"error": str(e)}), 502
+
+    # For AMS trays (A1-A4), push filament settings to the printer via bridge
+    if tray and tray.startswith("A") and tray != "External":
+        try:
+            cmd = {"command": "load_ams_tray", "spool_id": spool_id, "tray": tray}
+            BRIDGE_COMMANDS_PATH.write_text(json.dumps(cmd))
+        except Exception as e:
+            # Non-fatal — Spoolman was updated, just couldn't push to printer
+            pass
+
+    return jsonify(r.json())
 
 
 @app.route("/api/load-external/<int:spool_id>", methods=["POST"])
@@ -527,10 +558,124 @@ def bridge_action(action):
 
 @app.route("/api/config")
 def get_config():
+    # Build a browser-accessible Spoolman URL
+    if SPOOLMAN_PUBLIC_URL:
+        public_url = SPOOLMAN_PUBLIC_URL
+    else:
+        # Same host as the request, port 7912
+        host = request.host.split(":")[0]
+        scheme = request.scheme
+        public_url = f"{scheme}://{host}:7912"
+
     return jsonify({
-        "spoolman_url": SPOOLMAN_URL,
+        "spoolman_url": public_url,
         "brands": {k: v["name"] for k, v in BRANDS.items()},
     })
+
+
+# ── Settings ──────────────────────────────────────────────────
+
+ENV_PATH = SCRIPTS_DIR / "bridge.env"
+
+# Keys we allow reading/writing, in display order
+SETTINGS_KEYS = [
+    "PRINTER_IP",
+    "PRINTER_SERIAL",
+    "PRINTER_ACCESS_CODE",
+    "SPOOLMAN_URL",
+    "SPOOLMAN_PUBLIC_URL",
+]
+
+
+def _parse_env_file():
+    """Parse bridge.env into {key: value} dict."""
+    result = {}
+    if not ENV_PATH.exists():
+        return result
+    for line in ENV_PATH.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            k, v = line.split("=", 1)
+            result[k.strip()] = v.strip()
+    return result
+
+
+def _mask_secret(value, visible=4):
+    """Mask a secret, showing only the first `visible` characters."""
+    if not value or len(value) <= visible:
+        return value
+    return value[:visible] + "••••"
+
+
+@app.route("/api/settings", methods=["GET"])
+def get_settings():
+    env = _parse_env_file()
+    masked = {}
+    for key in SETTINGS_KEYS:
+        val = env.get(key, "")
+        if key == "PRINTER_ACCESS_CODE":
+            val = _mask_secret(val)
+        masked[key] = val
+    return jsonify(masked)
+
+
+@app.route("/api/settings", methods=["POST"])
+def save_settings():
+    data = request.json or {}
+
+    # Validate
+    ip = data.get("PRINTER_IP", "").strip()
+    if ip:
+        import re
+        if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+            return jsonify({"error": "Invalid IP address format"}), 400
+
+    serial = data.get("PRINTER_SERIAL", "").strip()
+    if serial and not serial.isalnum():
+        return jsonify({"error": "Serial must be alphanumeric"}), 400
+
+    # Read existing env to preserve comments and unmanaged keys
+    existing = _parse_env_file()
+
+    # Update only the keys we manage
+    for key in SETTINGS_KEYS:
+        if key not in data:
+            continue
+        new_val = data[key].strip()
+        # Don't overwrite access code with the masked value
+        if key == "PRINTER_ACCESS_CODE" and "••" in new_val:
+            continue
+        existing[key] = new_val
+
+    # Rebuild the env file preserving comments
+    lines = []
+    if ENV_PATH.exists():
+        written_keys = set()
+        for line in ENV_PATH.read_text().splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                k = stripped.split("=", 1)[0].strip()
+                if k in existing:
+                    lines.append(f"{k}={existing[k]}")
+                    written_keys.add(k)
+                else:
+                    lines.append(line)
+            else:
+                lines.append(line)
+        # Append any new keys not in the original file
+        for k in SETTINGS_KEYS:
+            if k in existing and k not in written_keys:
+                lines.append(f"{k}={existing[k]}")
+    else:
+        lines.append("# SpoolBridge Configuration")
+        lines.append("")
+        for k in SETTINGS_KEYS:
+            lines.append(f"{k}={existing.get(k, '')}")
+
+    ENV_PATH.write_text("\n".join(lines) + "\n")
+    return jsonify({"status": "ok", "message": "Settings saved. Restart services to apply."})
 
 
 # ============================================================

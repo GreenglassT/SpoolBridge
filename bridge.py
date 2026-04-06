@@ -67,12 +67,17 @@ log = logging.getLogger("bridge")
 
 # Track what's currently loaded so we only sync on changes
 current_vt_tray = {}       # external spool (virtual tray)
-current_ams_trays = {}     # {slot_id: {type, color, tag_uid, remain}}
-active_spool_id = None     # Spoolman spool ID for external slot
+current_ams_trays = {}     # {slot_id: {type, color, tag_uid, tray_uuid}}
+_ams_initialized = False   # True after first pushall seeds the baseline
+active_spool_id = None     # Spoolman spool ID currently printing
+active_print_name = ""     # subtask_name of the current print job
 last_gcode_state = ""      # track state transitions to fire finish only once
 bridge_state_path = Path(__file__).parent / "bridge_state.json"
 unknown_spools = {}        # {tray_key: {type, color, tag_uid, tray_num, tray}}
 ams_environment = {}       # {humidity, temp}
+ams_tray_remain = {}       # {slot_key: remain%} — updated separately from change detection
+printer_telemetry = {}     # live print status (progress, temps, fans, speed, etc.)
+print_start_time = None    # epoch when gcode_state first became RUNNING
 _bridge_state_dirty = True # write bridge_state.json only when state changed
 mqtt_client = None          # set in main(); used by publish_external_filament()
 bridge_commands_path = Path(__file__).parent / "bridge_commands.json"
@@ -174,8 +179,12 @@ def update_spool_weight(spool_id, used_grams):
         log.error(f"Failed to update weight for spool #{spool_id}: {e}")
 
 
-def publish_external_filament(spool):
-    """Publish MQTT command to configure the printer's external tray."""
+def publish_filament_setting(spool, ams_id=255, tray_id=254):
+    """Publish MQTT command to configure a printer tray's filament settings.
+
+    For the external tray use ams_id=255, tray_id=254 (default).
+    For AMS trays use ams_id=0, tray_id=0-3.
+    """
     f = spool.get("filament", {})
     material = (f.get("material") or "PLA").strip()
     color_hex = (f.get("color_hex") or "000000").lower()
@@ -191,8 +200,8 @@ def publish_external_filament(spool):
         "print": {
             "sequence_id": "0",
             "command": "ams_filament_setting",
-            "ams_id": 255,
-            "tray_id": 254,
+            "ams_id": ams_id,
+            "tray_id": tray_id,
             "tray_color": tray_color,
             "nozzle_temp_min": nozzle_min,
             "nozzle_temp_max": nozzle_max,
@@ -204,10 +213,16 @@ def publish_external_filament(spool):
 
     request_topic = f"device/{PRINTER_SERIAL}/request"
     mqtt_client.publish(request_topic, json.dumps(payload))
+    tray_label = "External" if ams_id == 255 else f"A{tray_id + 1}"
     log.info(
-        f"Published external filament: {tray_type} #{color_hex} "
+        f"Published filament to {tray_label}: {tray_type} #{color_hex} "
         f"({nozzle_min}-{nozzle_max}°C, code={filament_code})"
     )
+
+
+def publish_external_filament(spool):
+    """Publish MQTT command to configure the printer's external tray."""
+    publish_filament_setting(spool, ams_id=255, tray_id=254)
 
 
 # ============================================================
@@ -247,7 +262,8 @@ def log_event(event_type, tray="", spool_id=None, spool_name="", detail=""):
         log.error(f"Failed to write activity.json: {e}")
 
 
-def log_print(spool_id, spool_name, material, color_hex, grams_used, status):
+def log_print(spool_id, spool_name, material, color_hex, grams_used, status,
+              print_name="", duration=0):
     """Append a print record to prints.json (JSON-lines, append-only)."""
     try:
         path = SCRIPT_DIR / "prints.json"
@@ -259,6 +275,8 @@ def log_print(spool_id, spool_name, material, color_hex, grams_used, status):
             "color_hex": color_hex,
             "grams_used": grams_used,
             "status": status,
+            "print_name": print_name,
+            "duration": duration,
         })
         with open(path, "a") as f:
             f.write(entry + "\n")
@@ -276,8 +294,13 @@ def write_bridge_state():
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "connected": True,
         "ams_environment": ams_environment,
+        "ams_tray_remain": ams_tray_remain,
         "unknown_spools": list(unknown_spools.values()),
         "current_vt_tray": current_vt_tray,
+        "printer": printer_telemetry,
+        "print_start_time": print_start_time,
+        "active_spool_id": active_spool_id,
+        "active_print_name": active_print_name,
     }
     try:
         bridge_state_path.write_text(json.dumps(state, indent=2))
@@ -319,6 +342,27 @@ def process_commands():
                 spool_id=spool_id,
                 spool_name=f.get("name", "?"),
                 detail="Loaded via API"
+            )
+        elif cmd.get("command") == "load_ams_tray":
+            spool_id = cmd.get("spool_id")
+            tray_name = cmd.get("tray")  # "A1"-"A4"
+            if not spool_id or not tray_name:
+                log.error("load_ams_tray command missing spool_id or tray")
+                return
+            tray_idx = int(tray_name[1]) - 1  # "A1"→0, "A2"→1, etc.
+            try:
+                spool = sm_get(f"spool/{spool_id}")
+            except Exception as e:
+                log.error(f"Failed to fetch spool #{spool_id}: {e}")
+                return
+            publish_filament_setting(spool, ams_id=0, tray_id=tray_idx)
+            f = spool.get("filament", {})
+            log_event(
+                "tray_load",
+                tray=tray_name,
+                spool_id=spool_id,
+                spool_name=f.get("name", "?"),
+                detail="Pushed via API"
             )
         else:
             log.warning(f"Unknown command: {cmd.get('command')}")
@@ -370,7 +414,6 @@ def parse_ams_trays(msg_data):
                     "color": (tray.get("tray_color") or "")[:6],
                     "tag_uid": tray.get("tag_uid", ""),
                     "tray_uuid": tray.get("tray_uuid", ""),
-                    "remain": tray.get("remain", -1),
                 }
 
     return trays
@@ -387,6 +430,80 @@ def parse_ams_environment(msg_data):
     if humidity or temp:
         return {"humidity": humidity, "temp": temp}
     return None
+
+
+def parse_active_tray(msg_data):
+    """Track which AMS tray is actively feeding during a print."""
+    mc_print = msg_data.get("print", {})
+    gcode_state = mc_print.get("gcode_state", "")
+    if gcode_state != "RUNNING":
+        return None
+
+    # tray_now is the AMS tray index currently feeding (0-3)
+    ams_data = mc_print.get("ams", {})
+    tray_now = ams_data.get("tray_now")
+    subtask_name = mc_print.get("subtask_name", "")
+
+    return {"tray_now": tray_now, "subtask_name": subtask_name}
+
+
+def parse_ams_remain(msg_data):
+    """Extract AMS tray remaining % (updated separately from identity fields)."""
+    ams_list = msg_data.get("print", {}).get("ams", {}).get("ams", [])
+    result = {}
+    for ams_unit in ams_list:
+        ams_id = ams_unit.get("id", "0")
+        for tray in ams_unit.get("tray", []):
+            tray_id = tray.get("id", "0")
+            remain = tray.get("remain", -1)
+            if remain >= 0:
+                tray_num = int(tray_id) + 1
+                result[f"A{tray_num}"] = remain
+    return result
+
+
+def parse_printer_telemetry(msg_data):
+    """Extract live printer telemetry from MQTT report."""
+    mc = msg_data.get("print", {})
+    gcode_state = mc.get("gcode_state", "")
+    if not gcode_state:
+        return None
+
+    ams_data = mc.get("ams", {})
+    tray_now = ams_data.get("tray_now")
+    # Map tray index to tray name
+    if tray_now == "255":
+        tray_name = "External"
+    elif tray_now is not None:
+        try:
+            tray_name = f"A{int(tray_now) + 1}"
+        except (ValueError, TypeError):
+            tray_name = None
+    else:
+        tray_name = None
+
+    return {
+        "gcode_state": gcode_state,
+        "subtask_name": mc.get("subtask_name", ""),
+        "percent": mc.get("mc_percent") or mc.get("percent", 0),
+        "remain_time": mc.get("mc_remaining_time") or mc.get("remain_time", 0),
+        "layer_num": mc.get("layer_num", 0),
+        "total_layer_num": mc.get("total_layer_num", 0),
+        "nozzle_temper": mc.get("nozzle_temper", 0),
+        "nozzle_target": mc.get("nozzle_target_temper", 0),
+        "bed_temper": mc.get("bed_temper", 0),
+        "bed_target": mc.get("bed_target_temper", 0),
+        "cooling_fan": mc.get("cooling_fan_speed", "0"),
+        "big_fan1": mc.get("big_fan1_speed", "0"),
+        "big_fan2": mc.get("big_fan2_speed", "0"),
+        "heatbreak_fan": mc.get("heatbreak_fan_speed", "0"),
+        "spd_lvl": mc.get("spd_lvl", 0),
+        "spd_mag": mc.get("spd_mag", 100),
+        "wifi_signal": mc.get("wifi_signal", ""),
+        "tray_now": tray_name,
+        "print_type": mc.get("print_type", ""),
+        "gcode_file": mc.get("gcode_file", ""),
+    }
 
 
 def parse_print_finish(msg_data):
@@ -451,7 +568,15 @@ def handle_vt_tray_change(new_vt):
 
 def handle_ams_change(new_trays):
     """Handle AMS tray changes (Bambu RFID detection)."""
-    global current_ams_trays, _bridge_state_dirty
+    global current_ams_trays, _ams_initialized, _bridge_state_dirty
+
+    # First pushall after startup: seed baseline without logging events
+    if not _ams_initialized:
+        _ams_initialized = True
+        current_ams_trays = dict(new_trays)
+        _bridge_state_dirty = True
+        log.info(f"AMS baseline: {len(new_trays)} trays loaded (no events logged)")
+        return
 
     # Fetch spools once for all tray lookups (avoids N+1 API calls)
     changed = [k for k, v in new_trays.items() if current_ams_trays.get(k) != v]
@@ -511,10 +636,12 @@ def handle_ams_change(new_trays):
 
 def handle_print_finish(finish_data):
     """Handle print completion — update filament weight and log events."""
-    global active_spool_id
+    global active_spool_id, active_print_name, print_start_time
 
     used = finish_data.get("used_grams", 0)
     status = finish_data.get("status", "finish")
+    print_name = active_print_name
+    duration = int(time.time() - print_start_time) if print_start_time else 0
 
     # Get spool info before updating weight
     spool_name = ""
@@ -538,11 +665,21 @@ def handle_print_finish(finish_data):
     else:
         log.info(f"Print {status}, no filament usage reported")
 
+    # Skip logging empty records (no spool identified, no filament used)
+    if not active_spool_id and used == 0:
+        log.info("Skipping print log — no spool tracked and no filament usage")
+        active_print_name = ""
+        return
+
+    detail = f"{status}, {used:.1f}g used"
+    if print_name:
+        detail = f"{print_name} — {detail}"
+
     log_event(
         "print_done",
         spool_id=active_spool_id,
         spool_name=spool_name,
-        detail=f"{status}, {used:.1f}g used",
+        detail=detail,
     )
     log_print(
         spool_id=active_spool_id,
@@ -551,7 +688,11 @@ def handle_print_finish(finish_data):
         color_hex=color_hex,
         grams_used=used,
         status=status,
+        print_name=print_name,
+        duration=duration,
     )
+    active_print_name = ""
+    print_start_time = None
 
 
 # ============================================================
@@ -596,12 +737,54 @@ def on_message(client, userdata, msg):
     if ams:
         handle_ams_change(ams)
 
-    # Parse AMS environment
-    global ams_environment, _bridge_state_dirty
+    # Parse AMS environment + tray remaining %
+    global ams_environment, ams_tray_remain, _bridge_state_dirty
     env = parse_ams_environment(data)
     if env and env != ams_environment:
         ams_environment = env
         _bridge_state_dirty = True
+
+    remain = parse_ams_remain(data)
+    if remain and remain != ams_tray_remain:
+        ams_tray_remain = remain
+        _bridge_state_dirty = True
+
+    # Parse live printer telemetry
+    global printer_telemetry, print_start_time
+    telem = parse_printer_telemetry(data)
+    if telem:
+        # Track print start time for duration calculation
+        if telem["gcode_state"] == "RUNNING" and print_start_time is None:
+            print_start_time = time.time()
+        elif telem["gcode_state"] != "RUNNING":
+            print_start_time = None
+
+        if print_start_time:
+            telem["print_elapsed"] = int(time.time() - print_start_time)
+        else:
+            telem["print_elapsed"] = 0
+
+        if telem != printer_telemetry:
+            printer_telemetry = telem
+            _bridge_state_dirty = True
+
+    # Track which spool is actively printing (AMS tray_now → spool ID)
+    global active_spool_id, active_print_name
+    active = parse_active_tray(data)
+    if active:
+        active_print_name = active["subtask_name"] or active_print_name
+        tray_now = active["tray_now"]
+        if tray_now is not None and tray_now != "255":
+            # AMS tray — look up which spool is in that slot
+            slot_key = f"A0_{tray_now}"
+            tray_data = current_ams_trays.get(slot_key)
+            if tray_data:
+                tag_uid = tray_data.get("tag_uid", "")
+                tray_uuid = tray_data.get("tray_uuid", "")
+                if tag_uid or tray_uuid:
+                    spool = find_spool_by_tag(tag_uid, tray_uuid)
+                    if spool:
+                        active_spool_id = spool["id"]
 
     # Write shared state for web server
     write_bridge_state()
@@ -634,6 +817,21 @@ def main():
     log.info("=== SpoolBridge — MQTT Sync Daemon ===")
     log.info(f"Printer:  {PRINTER_IP} (serial: {PRINTER_SERIAL})")
     log.info(f"Spoolman: {SPOOLMAN_URL}")
+
+    # Restore print state from previous session if a print was in progress
+    global print_start_time, active_spool_id, active_print_name
+    try:
+        prev = json.loads(bridge_state_path.read_text())
+        if prev.get("printer", {}).get("gcode_state") == "RUNNING":
+            if prev.get("print_start_time"):
+                print_start_time = prev["print_start_time"]
+            if prev.get("active_spool_id"):
+                active_spool_id = prev["active_spool_id"]
+            if prev.get("active_print_name"):
+                active_print_name = prev["active_print_name"]
+            log.info(f"Restored print state: spool #{active_spool_id}, \"{active_print_name}\"")
+    except Exception:
+        pass
 
     # Verify Spoolman is reachable
     try:
