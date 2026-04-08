@@ -135,8 +135,7 @@ def reset_bridge_globals():
         bridge.last_gcode_state = ""
         bridge.unknown_spools = {}
         bridge.ams_environment = {}
-        bridge._activity_line_count = 0
-        bridge._print_line_count = 0
+        bridge._jsonl_counts.clear()
         bridge._ams_initialized = True  # skip init path in tests
         bridge._bridge_state_dirty = True  # allow state writes
         bridge.ams_tray_remain = {}

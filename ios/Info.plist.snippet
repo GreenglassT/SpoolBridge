@@ -1,0 +1,16 @@
+<!-- Add these keys to your Xcode project's Info.plist -->
+<!-- Or add via Xcode: Target → Info → Custom iOS Target Properties -->
+
+<key>NFCReaderUsageDescription</key>
+<string>SpoolBridge uses NFC to write filament data to spool tags.</string>
+
+<!-- Required for local network access to your SpoolBridge server -->
+<key>NSLocalNetworkUsageDescription</key>
+<string>SpoolBridge connects to your local server to fetch spool data.</string>
+
+<!-- Allow HTTP (not just HTTPS) for local network -->
+<key>NSAppTransportSecurity</key>
+<dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+</dict>

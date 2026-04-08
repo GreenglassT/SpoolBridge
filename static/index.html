@@ -566,9 +566,8 @@ input::placeholder { color: var(--text-dim); }
   border: 1px solid var(--border);
 }
 
-/* ── Filament Usage Chart ─────────────────────────────────── */
+/* ── Usage History Chart ──────────────────────────────────── */
 .usage-chart { margin-bottom: 24px; }
-.usage-chart .section-title { margin-bottom: 12px; }
 .usage-row {
   display: flex;
   align-items: center;
@@ -577,17 +576,16 @@ input::placeholder { color: var(--text-dim); }
   font-size: 0.8rem;
 }
 .usage-label {
-  width: 160px;
+  width: 60px;
   flex-shrink: 0;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--text);
-  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-family: var(--mono);
 }
 .usage-bar-track {
   flex: 1;
-  height: 14px;
+  height: 18px;
   background: var(--bg-input);
   border-radius: 3px;
   overflow: hidden;
@@ -843,7 +841,7 @@ input::placeholder { color: var(--text-dim); }
       <div>
         <div class="section-header"><span class="section-title" id="low-stock-title">Low Stock</span></div>
         <div id="low-stock-list"></div>
-        <div class="section-header" style="margin-top:16px;"><span class="section-title">Filament Usage</span></div>
+        <div class="section-header" style="margin-top:16px;"><span class="section-title">Usage History</span></div>
         <div class="usage-chart" id="usage-chart"></div>
       </div>
     </div>
@@ -1132,6 +1130,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderDashboard();
   renderExistingFilaments();
   fetchActivity();
+  fetchUsageData();
   renderSpools();
   renderTagSpools();
   renderTagAssignments();
@@ -1147,10 +1146,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }, 10000);
 
-  // Activity feed on a slower 30-second interval
+  // Activity feed + usage history on a slower 30-second interval
   setInterval(() => {
     if (document.querySelector('#panel-dashboard.active')) {
       fetchActivity();
+      fetchUsageData();
     }
   }, 30000);
 
@@ -1223,12 +1223,6 @@ function switchTab(panel) {
 function renderDashboard() {
   renderTrayStatusFromSpools();
   renderLowStock();
-  renderUsageChart();
-}
-
-function isLowStock(s) {
-  const w = s.remaining_weight || 0;
-  return w > 0 && w < 200;
 }
 
 function renderTrayStatusFromSpools() {
@@ -1273,6 +1267,21 @@ function renderTrayStrip(trays) {
     const amsRemain = remain[slot.key];
     const remainHtml = (amsRemain !== undefined && !isExternal)
       ? `<div class="tray-remain">${amsRemain}% remaining</div>` : '';
+    // Build spool picker options for this tray
+    const pickerOptions = spools
+      .filter(s => !s.archived && s.filament)
+      .map(s => `<option value="${s.id}">${escHtml(s.filament.name || 'Unknown')} (${(s.remaining_weight||0).toFixed(0)}g)</option>`)
+      .join('');
+    const pickerId = `tray-picker-${slot.key}`;
+    const pickerHtml = `
+      <div style="margin-top:6px; display:flex; gap:4px; align-items:center;">
+        <select id="${pickerId}" style="flex:1; font-size:0.7rem; padding:2px 4px;">
+          <option value="">Load spool...</option>
+          ${pickerOptions}
+        </select>
+        <button class="btn btn-primary btn-sm" style="font-size:0.65rem; padding:2px 6px;" onclick="loadTrayFromPicker('${slot.key}','${pickerId}')">Go</button>
+      </div>`;
+
     if (t) {
       const pct = Math.round((t.remaining_weight / t.total_weight) * 100);
       const barColor = pct > 30 ? 'var(--green)' : pct > 10 ? 'var(--yellow)' : 'var(--red)';
@@ -1288,7 +1297,10 @@ function renderTrayStrip(trays) {
           <div class="weight-bar" style="width:100%; margin-top:4px;">
             <div class="weight-bar-fill" style="width:${pct}%; background:${barColor};"></div>
           </div>
-          ${isExternal ? `<div style="margin-top:8px;display:flex;gap:12px;justify-content:center;"><a href="#" onclick="event.preventDefault();unloadExternalTray(${t.spool_id})" class="detail-link" style="font-size:0.72rem;color:var(--red);">Unload</a><a href="#" onclick="event.preventDefault();switchTab('spools')" class="detail-link" style="font-size:0.72rem;">Swap</a></div>` : ''}
+          <div style="margin-top:8px;display:flex;gap:12px;justify-content:center;">
+            <a href="#" onclick="event.preventDefault();${isExternal ? `unloadExternalTray(${t.spool_id})` : `clearSpoolTray(${t.spool_id})`}" class="detail-link" style="font-size:0.72rem;color:var(--red);">Unload</a>
+          </div>
+          ${pickerHtml}
         </div>`;
     } else {
       const labelColor = isExternal ? 'color:var(--accent);' : '';
@@ -1299,7 +1311,7 @@ function renderTrayStrip(trays) {
           <div class="tray-swatch" style="background:var(--bg-input); border-style:dashed;"></div>
           <div class="tray-meta" style="color:var(--text-dim);">Empty</div>
           ${remainHtml}
-          ${isExternal ? '<div style="margin-top:8px;"><a href="#" onclick="event.preventDefault();switchTab(\'spools\')" class="detail-link" style="font-size:0.72rem;">Browse spools to load</a></div>' : ''}
+          ${pickerHtml}
         </div>`;
     }
   }
@@ -1496,7 +1508,23 @@ async function linkUnknownSpool(tagUid, type, color, tray) {
 }
 
 function renderLowStock() {
-  const low = spools.filter(s => !s.archived && isLowStock(s));
+  // Aggregate remaining weight by filament ID
+  const byFilament = {};
+  for (const s of spools) {
+    if (s.archived) continue;
+    const f = s.filament;
+    if (!f || !f.id) continue;
+    if (!byFilament[f.id]) {
+      byFilament[f.id] = { filament: f, totalWeight: 0, spoolCount: 0 };
+    }
+    byFilament[f.id].totalWeight += (s.remaining_weight ?? 0);
+    byFilament[f.id].spoolCount++;
+  }
+
+  const low = Object.values(byFilament).filter(
+    g => g.totalWeight < 200 && g.filament.weight > 0
+  ).sort((a, b) => a.totalWeight - b.totalWeight);
+
   const el = document.getElementById('low-stock-list');
   const title = document.getElementById('low-stock-title');
 
@@ -1507,14 +1535,15 @@ function renderLowStock() {
   }
 
   title.textContent = `Low Stock (${low.length})`;
-  el.innerHTML = low.map(s => {
-    const f = s.filament || {};
-    const w = s.remaining_weight || 0;
+  el.innerHTML = low.map(g => {
+    const f = g.filament;
+    const w = g.totalWeight;
     const cls = w < 100 ? 'critical' : 'warning';
+    const count = g.spoolCount > 1 ? ` <span class="dim" style="font-size:0.7rem;">(${g.spoolCount} spools)</span>` : '';
     return `
       <div class="low-stock-card ${cls}">
         <div class="low-stock-swatch" style="background:#${f.color_hex || '333'};"></div>
-        <div class="low-stock-name">${escHtml(f.name || 'Unknown')}</div>
+        <div class="low-stock-name">${escHtml(f.name || 'Unknown')}${count}</div>
         <div class="low-stock-weight">${w.toFixed(0)}g</div>
       </div>`;
   }).join('');
@@ -1753,6 +1782,24 @@ async function postTrayAssign(spoolId, tray) {
   return r.json();
 }
 
+async function loadTrayFromPicker(trayKey, pickerId) {
+  const select = document.getElementById(pickerId);
+  const spoolId = parseInt(select.value);
+  if (!spoolId) return;
+  try {
+    if (trayKey === 'External') {
+      await api(`/api/load-external/${spoolId}`, { method: 'POST' });
+    } else {
+      await postTrayAssign(spoolId, trayKey);
+    }
+    toast(`Loaded spool #${spoolId} into ${trayKey}`, 'success');
+    await loadSpools();
+    renderDashboard();
+  } catch(e) {
+    toast('Failed to load tray: ' + e.message, 'error');
+  }
+}
+
 async function unloadExternalTray(spoolId) {
   try {
     await postTrayAssign(spoolId, '');
@@ -1890,6 +1937,9 @@ function renderTagSpools() {
   }
 }
 
+let _currentTagJson = null;
+let _currentTagUrl = null;
+
 async function selectTagSpool(id) {
   if (selectedTagSpool === id) {
     selectedTagSpool = null;
@@ -1901,12 +1951,34 @@ async function selectTagSpool(id) {
 
   try {
     const data = await api(`/api/tag/${id}`);
+    _currentTagJson = data.tag_json;
+    _currentTagUrl = data.spool_url;
     const jsonStr = JSON.stringify(data.tag_json, null, 2);
+    const hasWebNfc = 'NDEFReader' in window;
     const el = document.getElementById('tag-output-inline');
     if (el) {
       el.innerHTML = `
         <div class="tag-panel">
           <h3>NFC Tag Data — Spool #${id}</h3>
+          ${hasWebNfc ? `
+          <div style="margin-bottom:16px; padding:12px; background:var(--bg-card); border:1px solid var(--green); border-radius:8px;">
+            <div style="font-weight:600; margin-bottom:8px; color:var(--green);">Write to NFC Tag</div>
+            <p class="muted" style="font-size:0.78rem; margin-bottom:10px;">Hold an NTAG215 sticker to the back of your phone and tap Write.</p>
+            <button class="btn btn-primary" id="btn-write-nfc" onclick="writeNfcTag()">Write Tag</button>
+            <span id="nfc-write-status" class="muted" style="margin-left:10px; font-size:0.78rem;"></span>
+          </div>
+          ` : `
+          <div style="margin-bottom:16px; padding:12px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;">
+            <div style="font-weight:600; margin-bottom:8px;">Write with NFC Tools (iPhone)</div>
+            <ol class="muted" style="font-size:0.78rem; margin:0 0 10px 16px; padding:0;">
+              <li>Copy the JSON below</li>
+              <li>Open <strong>NFC Tools</strong> app &rarr; Write &rarr; Add a record</li>
+              <li>Select <strong>Data</strong> &rarr; paste the JSON</li>
+              <li>Set content type to <strong>application/json</strong></li>
+              <li>Tap <strong>Write</strong> and hold tag to phone</li>
+            </ol>
+          </div>
+          `}
           <div style="margin-bottom:14px;">
             <span class="form-label">OpenSpool JSON</span>
             <span class="dim" style="font-size:0.72rem; margin-left:8px;">MIME: application/json</span>
@@ -1927,16 +1999,69 @@ async function selectTagSpool(id) {
   }
 }
 
+async function writeNfcTag() {
+  if (!_currentTagJson) return;
+  const btn = document.getElementById('btn-write-nfc');
+  const status = document.getElementById('nfc-write-status');
+  btn.disabled = true;
+  btn.textContent = 'Hold tag to phone...';
+  status.textContent = '';
+  status.style.color = '';
+
+  try {
+    const ndef = new NDEFReader();
+    const jsonStr = JSON.stringify(_currentTagJson);
+    const encoder = new TextEncoder();
+    const records = [{
+      recordType: "mime",
+      mediaType: "application/json",
+      data: encoder.encode(jsonStr),
+    }];
+    if (_currentTagUrl) {
+      records.push({ recordType: "url", data: _currentTagUrl });
+    }
+    await ndef.write({ records });
+    status.textContent = 'Tag written!';
+    status.style.color = 'var(--green)';
+    toast('NFC tag written successfully', 'success');
+  } catch(e) {
+    if (e.name === 'AbortError' || e.message.includes('cancelled')) {
+      status.textContent = 'Cancelled';
+    } else {
+      status.textContent = 'Failed: ' + e.message;
+      status.style.color = 'var(--red)';
+      toast('NFC write failed: ' + e.message, 'error');
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Write Tag';
+  }
+}
+
 function copyTag() {
   const text = document.getElementById('tag-json-text').textContent;
-  navigator.clipboard.writeText(text);
-  toast('JSON copied to clipboard', 'success');
+  navigator.clipboard.writeText(text).then(
+    () => toast('JSON copied to clipboard', 'success'),
+    () => { /* fallback for older browsers */ selectAndCopy('tag-json-text'); }
+  );
 }
 
 function copyUrl() {
   const text = document.getElementById('tag-url-text').textContent;
-  navigator.clipboard.writeText(text);
-  toast('URL copied to clipboard', 'success');
+  navigator.clipboard.writeText(text).then(
+    () => toast('URL copied to clipboard', 'success'),
+    () => { selectAndCopy('tag-url-text'); }
+  );
+}
+
+function selectAndCopy(elementId) {
+  const el = document.getElementById(elementId);
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  toast('Text selected — press Ctrl+C / Cmd+C to copy', 'success');
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -2466,46 +2591,69 @@ async function bridgeAction(action) {
 }
 
 // ===============================================================
-// Filament Usage Chart
+// Usage History Chart
 // ===============================================================
+
+let _cachedUsage = null;
+
+async function fetchUsageData() {
+  try {
+    const data = await api('/api/usage');
+    if (JSON.stringify(data) === JSON.stringify(_cachedUsage)) return;
+    _cachedUsage = data;
+  } catch(e) {
+    _cachedUsage = [];
+  }
+  renderUsageChart();
+}
 
 function renderUsageChart() {
   const el = document.getElementById('usage-chart');
-  const active = spools.filter(s => !s.archived);
-  if (active.length === 0) { el.innerHTML = ''; return; }
+  const usage = _cachedUsage;
+  if (!usage || usage.length === 0) {
+    el.innerHTML = '<div class="empty" style="padding:12px;">No usage data yet. Filament consumption is tracked as AMS weights change.</div>';
+    return;
+  }
 
-  const withUsage = active.map(s => {
-    const f = s.filament || {};
-    const remaining = s.remaining_weight || 0;
-    const total = f.weight || 1000;
-    const pct = total > 0 ? (remaining / total) * 100 : 100;
-    // Include tray position if assigned, to disambiguate duplicates
-    const extra = s.extra || {};
-    let tray = unquoteExtra(extra.active_tray);
-    if (tray && tray.includes('_')) {
-      const parts = tray.split('_');
-      const idx = parseInt(parts[parts.length - 1], 10);
-      if (!isNaN(idx)) tray = `A${idx + 1}`;
-    }
-    let label = f.name || 'Unknown';
-    if (tray) label += ` (${tray})`;
-    return { spool: s, remaining, total, pct, name: label, color: f.color_hex || '666' };
-  }).filter(item => item.pct < 100);
+  // Group by day, sum grams, track materials with colors
+  const byDay = {};
+  for (const u of usage) {
+    const day = (u.ts || '').substring(0, 10);
+    if (!day) continue;
+    if (!byDay[day]) byDay[day] = { grams: 0, materials: {} };
+    const g = u.grams_used || 0;
+    byDay[day].grams += g;
+    const mat = u.material || '?';
+    const color = u.color_hex || '666';
+    if (!byDay[day].materials[mat]) byDay[day].materials[mat] = { grams: 0, color };
+    byDay[day].materials[mat].grams += g;
+  }
 
-  withUsage.sort((a, b) => a.pct - b.pct);
-  const top = withUsage.slice(0, 10);
+  const days = Object.keys(byDay).sort().slice(-14);
+  if (days.length === 0) { el.innerHTML = ''; return; }
 
-  if (top.length === 0) { el.innerHTML = ''; return; }
+  const maxGrams = Math.max(...days.map(d => byDay[d].grams), 1);
 
   let html = '';
-  for (const item of top) {
+  for (const day of days) {
+    const data = byDay[day];
+    const pct = (data.grams / maxGrams) * 100;
+    const label = day.substring(5);
+
+    // Stacked bar segments by material
+    let barHtml = '';
+    for (const [mat, info] of Object.entries(data.materials)) {
+      const segPct = data.grams > 0 ? (info.grams / data.grams) * 100 : 0;
+      barHtml += `<div style="width:${segPct}%; height:100%; background:#${info.color}; display:inline-block;" title="${mat}: ${info.grams.toFixed(0)}g"></div>`;
+    }
+
     html += `
       <div class="usage-row">
-        <div class="usage-label">${escHtml(item.name)}</div>
+        <div class="usage-label">${escHtml(label)}</div>
         <div class="usage-bar-track">
-          <div class="usage-bar-fill" style="width:${item.pct.toFixed(1)}%; background:#${item.color};"></div>
+          <div style="width:${pct.toFixed(1)}%; height:100%; border-radius:3px; overflow:hidden; display:flex;">${barHtml}</div>
         </div>
-        <div class="usage-stat">${item.remaining.toFixed(0)}g / ${item.total.toFixed(0)}g</div>
+        <div class="usage-stat">${data.grams.toFixed(0)}g</div>
       </div>`;
   }
   el.innerHTML = html;

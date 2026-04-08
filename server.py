@@ -320,6 +320,11 @@ def get_prints():
     return jsonify(_read_jsonl(SCRIPTS_DIR / "prints.json"))
 
 
+@app.route("/api/usage", methods=["GET"])
+def get_usage():
+    return jsonify(_read_jsonl(SCRIPTS_DIR / "usage.json", limit=500))
+
+
 @app.route("/api/spools/<int:spool_id>", methods=["PATCH"])
 def update_spool(spool_id):
     data = request.json or {}

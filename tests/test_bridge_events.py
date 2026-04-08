@@ -66,7 +66,7 @@ def test_log_event_caps_at_200(tmp_scripts_dir):
     activity_path.write_text("\n".join(entries) + "\n")
 
     # Set the counter to match pre-filled lines
-    bridge._activity_line_count = 249
+    bridge._jsonl_counts["activity.json"] = 249
 
     # Add 2 more events — second one pushes total to 251, triggering trim
     log_event("event_250", detail="250th")
@@ -117,7 +117,7 @@ def test_log_print_creates_file(tmp_scripts_dir):
 
 
 def test_log_print_caps_at_500(tmp_scripts_dir):
-    """prints.json is trimmed to 500 entries when it exceeds the cap."""
+    """prints.json is trimmed when exceeding cap (500), keeps 80% (400)."""
     prints_path = tmp_scripts_dir / "prints.json"
 
     # Pre-fill with 499 entries
@@ -130,14 +130,14 @@ def test_log_print_caps_at_500(tmp_scripts_dir):
         entries.append(entry)
     prints_path.write_text("\n".join(entries) + "\n")
 
-    # Add 2 more — second pushes to 501, triggering trim
+    # Add 2 more — second pushes to 501, triggering trim to 400 (80% of 500)
     log_print(spool_id=500, spool_name="A", material="PLA",
               color_hex="000000", grams_used=1.0, status="finish")
     log_print(spool_id=501, spool_name="B", material="PLA",
               color_hex="000000", grams_used=1.0, status="finish")
 
     lines = prints_path.read_text().strip().splitlines()
-    assert len(lines) == 500
+    assert len(lines) == 400
 
     # Last entry should be the most recent
     last = json.loads(lines[-1])

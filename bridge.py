@@ -311,6 +311,18 @@ def sync_remain_to_spoolman():
             sm_patch(f"spool/{spool['id']}", {"remaining_weight": new_weight})
             _last_synced_remain[tray_name] = pct
             log.info(f"Synced {tray_name} weight: {old_weight:.0f}g → {new_weight}g ({pct}%)")
+            # Log consumption for usage history chart
+            used = old_weight - new_weight
+            if used > 0:
+                f = spool.get("filament") or {}
+                log_usage(
+                    spool_id=spool["id"],
+                    spool_name=f.get("name", "?"),
+                    material=f.get("material", "?"),
+                    color_hex=f.get("color_hex", "000000"),
+                    grams_used=used,
+                    tray=tray_name,
+                )
         except Exception as e:
             log.warning(f"Failed to sync {tray_name} weight: {e}")
 
@@ -403,67 +415,54 @@ def publish_external_filament(spool):
 
 SCRIPT_DIR = DATA_DIR
 
+_jsonl_counts = {}
 
-_activity_line_count = 0
-
-def log_event(event_type, tray="", spool_id=None, spool_name="", detail=""):
-    """Append an event to activity.json (JSON-lines, capped at 200 entries)."""
-    global _activity_line_count
+def _append_jsonl(filename, record, cap):
+    """Append a JSON-lines record to a file, trimming to cap when exceeded."""
     try:
-        path = SCRIPT_DIR / "activity.json"
-        entry = json.dumps({
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "type": event_type,
-            "tray": tray,
-            "spool_id": spool_id,
-            "spool_name": spool_name,
-            "detail": detail,
-        })
-        # Count lines on first call
-        if _activity_line_count == 0 and path.exists():
-            _activity_line_count = sum(1 for _ in open(path))
-        # Append-only most of the time; trim only when over cap
+        path = SCRIPT_DIR / filename
+        record["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        entry = json.dumps(record)
+        if filename not in _jsonl_counts and path.exists():
+            _jsonl_counts[filename] = sum(1 for _ in open(path))
         with open(path, "a") as f:
             f.write(entry + "\n")
-        _activity_line_count += 1
-        if _activity_line_count > 250:
-            lines = path.read_text().strip().splitlines()[-200:]
+        _jsonl_counts[filename] = _jsonl_counts.get(filename, 0) + 1
+        if _jsonl_counts[filename] > cap:
+            keep = int(cap * 0.8)  # trim to 80% of cap
+            lines = path.read_text().strip().splitlines()[-keep:]
             path.write_text("\n".join(lines) + "\n")
-            _activity_line_count = len(lines)
+            _jsonl_counts[filename] = len(lines)
     except Exception as e:
-        log.error(f"Failed to write activity.json: {e}")
+        log.error(f"Failed to write {filename}: {e}")
 
 
-_print_line_count = 0
+def log_event(event_type, tray="", spool_id=None, spool_name="", detail=""):
+    """Append an event to activity.json (capped at 250 entries)."""
+    _append_jsonl("activity.json", {
+        "type": event_type, "tray": tray,
+        "spool_id": spool_id, "spool_name": spool_name, "detail": detail,
+    }, cap=250)
+
+
+def log_usage(spool_id, spool_name, material, color_hex, grams_used, tray=""):
+    """Log filament consumption to usage.json (from AMS weight sync)."""
+    _append_jsonl("usage.json", {
+        "spool_id": spool_id, "spool_name": spool_name,
+        "material": material, "color_hex": color_hex,
+        "grams_used": round(grams_used, 1), "tray": tray,
+    }, cap=1000)
+
 
 def log_print(spool_id, spool_name, material, color_hex, grams_used, status,
               print_name="", duration=0):
-    """Append a print record to prints.json (JSON-lines, capped at 500 entries)."""
-    global _print_line_count
-    try:
-        path = SCRIPT_DIR / "prints.json"
-        entry = json.dumps({
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "spool_id": spool_id,
-            "spool_name": spool_name,
-            "material": material,
-            "color_hex": color_hex,
-            "grams_used": grams_used,
-            "status": status,
-            "print_name": print_name,
-            "duration": duration,
-        })
-        if _print_line_count == 0 and path.exists():
-            _print_line_count = sum(1 for _ in open(path))
-        with open(path, "a") as f:
-            f.write(entry + "\n")
-        _print_line_count += 1
-        if _print_line_count > 500:
-            lines = path.read_text().strip().splitlines()[-500:]
-            path.write_text("\n".join(lines) + "\n")
-            _print_line_count = len(lines)
-    except Exception as e:
-        log.error(f"Failed to write prints.json: {e}")
+    """Append a print record to prints.json (capped at 500 entries)."""
+    _append_jsonl("prints.json", {
+        "spool_id": spool_id, "spool_name": spool_name,
+        "material": material, "color_hex": color_hex,
+        "grams_used": grams_used, "status": status,
+        "print_name": print_name, "duration": duration,
+    }, cap=500)
 
 
 def write_bridge_state():
