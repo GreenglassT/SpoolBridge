@@ -18,9 +18,55 @@ import bridge
 
 def test_update_spool_tray_api_failure():
     """update_spool_tray should not raise when requests.patch raises Exception."""
-    with patch("bridge.requests.patch", side_effect=Exception("network error")):
-        # Should not raise — function has try/except
-        bridge.update_spool_tray(1, "A1")
+    with patch("bridge.sm_get", return_value=[]):
+        with patch("bridge.requests.patch", side_effect=Exception("network error")):
+            # Should not raise — function has try/except
+            bridge.update_spool_tray(1, "A1")
+
+
+def test_update_spool_tray_evicts_existing():
+    """update_spool_tray should clear active_tray from other spools in the same tray."""
+    other_spool = {
+        "id": 99, "extra": {"active_tray": '"A2"'},
+        "filament": {"name": "Old"}, "remaining_weight": 500,
+    }
+    target_spool = {
+        "id": 5, "extra": {"active_tray": '"A1"'},
+        "filament": {"name": "New"}, "remaining_weight": 800,
+    }
+    all_spools = [other_spool, target_spool]
+
+    patches = []
+    def mock_patch(endpoint, data):
+        patches.append((endpoint, data))
+
+    with patch("bridge.sm_patch", side_effect=mock_patch):
+        bridge.update_spool_tray(5, "A2", all_spools=all_spools)
+
+    # Should have evicted spool #99 from A2, then assigned spool #5 to A2
+    assert len(patches) == 2
+    assert patches[0] == ("spool/99", {"extra": {"active_tray": '""'}})
+    assert patches[1][0] == "spool/5"
+    assert '"A2"' in patches[1][1]["extra"]["active_tray"]
+
+
+def test_update_spool_tray_no_eviction_needed():
+    """update_spool_tray should not evict when no other spool occupies the tray."""
+    target_spool = {
+        "id": 5, "extra": {"active_tray": '""'},
+        "filament": {"name": "New"}, "remaining_weight": 800,
+    }
+
+    patches = []
+    def mock_patch(endpoint, data):
+        patches.append((endpoint, data))
+
+    with patch("bridge.sm_patch", side_effect=mock_patch):
+        bridge.update_spool_tray(5, "A1", all_spools=[target_spool])
+
+    # Only the assignment, no eviction
+    assert len(patches) == 1
+    assert patches[0][0] == "spool/5"
 
 
 # ---------------------------------------------------------------------------

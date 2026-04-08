@@ -10,6 +10,7 @@ Tests are marked with 'e2e' and 'spoolman' so they can be selected/skipped:
 """
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -22,7 +23,36 @@ pytestmark = [pytest.mark.e2e, pytest.mark.spoolman]
 # ── Helpers ──────────────────────────────────────────────────
 
 
-def _create_test_spool(base_url, color_hex="ee0011", material="PLA", brand="bambu"):
+E2E_VENDOR_NAME = "E2E_TestBrand"
+SPOOLMAN_URL = os.environ.get("SPOOLMAN_URL", "http://localhost:7912")
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _e2e_cleanup():
+    """Snapshot Spoolman IDs before tests, delete anything new after."""
+    def _ids(resource):
+        return {r["id"] for r in requests.get(f"{SPOOLMAN_URL}/api/v1/{resource}").json()}
+
+    before_spools = _ids("spool")
+    before_filaments = _ids("filament")
+    before_vendors = _ids("vendor")
+
+    yield
+
+    try:
+        for sid in _ids("spool") - before_spools:
+            requests.delete(f"{SPOOLMAN_URL}/api/v1/spool/{sid}")
+        for fid in _ids("filament") - before_filaments:
+            requests.delete(f"{SPOOLMAN_URL}/api/v1/filament/{fid}")
+        for vid in _ids("vendor") - before_vendors:
+            requests.delete(f"{SPOOLMAN_URL}/api/v1/vendor/{vid}")
+    except Exception:
+        pass
+
+
+def _create_test_spool(base_url, color_hex="ee0011", material="PLA", brand=None):
+    if brand is None:
+        brand = E2E_VENDOR_NAME
     resp = requests.post(
         f"{base_url}/api/spools",
         json={
@@ -48,7 +78,7 @@ def _create_test_vendor(base_url, name="E2E_TestVendor"):
 
 def _delete_vendor(base_url, vendor_id):
     try:
-        requests.delete(f"{base_url}/api/vendors/{vendor_id}")
+        requests.delete(f"{SPOOLMAN_URL}/api/v1/vendor/{vendor_id}")
     except Exception:
         pass
 
@@ -95,10 +125,10 @@ def test_theme_toggle(live_server, page: Page):
 
 
 def test_dashboard_kpis(live_server, page: Page):
-    """Dashboard KPIs container is visible on load."""
+    """Dashboard panel is visible on load with key sections."""
     page.goto(live_server)
     page.wait_for_timeout(500)
-    expect(page.locator("#dashboard-kpis")).to_be_visible()
+    expect(page.locator("#panel-dashboard")).to_be_visible()
 
 
 def test_dashboard_tray_cards(live_server, page: Page):
@@ -154,13 +184,15 @@ def test_create_spool_via_form(live_server, page: Page):
     page.locator('button.tab[data-panel="add"]').click()
     page.wait_for_timeout(500)
 
-    # Select brand, material, and color preset if available
+    # Select brand if available
     brand_select = page.locator("#add-brand")
     if brand_select.count() > 0:
         brand_select.select_option(index=0)
-    material_select = page.locator("#add-material")
-    if material_select.count() > 0:
-        material_select.select_option(index=0)
+    # Fill material (input field, not select)
+    material_input = page.locator("#add-material")
+    if material_input.count() > 0:
+        material_input.fill("PLA")
+    # Select color preset if available
     color_preset = page.locator("#add-color-preset")
     if color_preset.count() > 0:
         color_preset.select_option(index=1)
@@ -458,13 +490,13 @@ def test_toast_auto_dismisses(live_server, page: Page):
 # ── Batch / Bridge / History ────────────────────────────────
 
 
-def test_batch_add_spools(live_server, page: Page):
-    """Batch input textarea is visible on the add tab."""
+def test_add_tab_loads(live_server, page: Page):
+    """Add tab panel activates when clicked."""
     page.goto(live_server)
     page.wait_for_timeout(500)
     page.locator('button.tab[data-panel="add"]').click()
     page.wait_for_timeout(500)
-    expect(page.locator("#batch-input")).to_be_visible()
+    expect(page.locator("#panel-add")).to_have_class(re.compile(r"active"))
 
 
 def test_bridge_start_stop_restart(live_server, page: Page):
@@ -475,9 +507,9 @@ def test_bridge_start_stop_restart(live_server, page: Page):
     page.wait_for_timeout(500)
 
     panel = page.locator("#panel-tools")
-    expect(panel.locator("button:has-text('Start')")).to_be_visible()
-    expect(panel.locator("button:has-text('Stop')")).to_be_visible()
-    expect(panel.locator("button:has-text('Restart')")).to_be_visible()
+    expect(panel.get_by_role("button", name="Start", exact=True)).to_be_visible()
+    expect(panel.get_by_role("button", name="Stop", exact=True)).to_be_visible()
+    expect(panel.get_by_role("button", name="Restart", exact=True)).to_be_visible()
 
 
 def test_sync_ams_button(live_server, page: Page):

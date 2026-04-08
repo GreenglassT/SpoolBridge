@@ -323,7 +323,7 @@ def get_prints():
 @app.route("/api/spools/<int:spool_id>", methods=["PATCH"])
 def update_spool(spool_id):
     data = request.json or {}
-    allowed = {"remaining_weight", "location", "archived"}
+    allowed = {"remaining_weight", "location", "archived", "extra"}
     payload = {k: v for k, v in data.items() if k in allowed}
 
     try:
@@ -478,6 +478,83 @@ def get_tag(spool_id):
     tag = build_openspool_tag(spool)
     spool_url = f"{request.host_url}spool/{spool_id}"
     return jsonify({"tag_json": tag, "spool_url": spool_url, "spool": spool})
+
+
+# ── Spoolman Proxy Routes ────────────────────────────────────
+
+@app.route("/api/spools/<int:spool_id>/use", methods=["PUT"])
+def use_spool(spool_id):
+    """Deduct filament from spool by length used (mm)."""
+    try:
+        r = http_requests.put(
+            f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}/use",
+            json=request.json or {},
+        )
+        r.raise_for_status()
+        return jsonify(r.json())
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/spools/<int:spool_id>/measure", methods=["PUT"])
+def measure_spool(spool_id):
+    """Update spool weight from a scale measurement."""
+    try:
+        r = http_requests.put(
+            f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}/measure",
+            json=request.json or {},
+        )
+        r.raise_for_status()
+        return jsonify(r.json())
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/locations", methods=["GET"])
+def get_locations():
+    """List all spool locations from Spoolman."""
+    try:
+        r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/location")
+        r.raise_for_status()
+        return jsonify(r.json())
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/materials", methods=["GET"])
+def get_materials():
+    """List all materials from Spoolman."""
+    try:
+        r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/material")
+        r.raise_for_status()
+        return jsonify(r.json())
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/backup", methods=["POST"])
+def create_backup():
+    """Trigger a Spoolman database backup."""
+    try:
+        r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/backup")
+        r.raise_for_status()
+        return jsonify(r.json())
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/export/<entity>", methods=["GET"])
+def export_data(entity):
+    """Export spools, filaments, or vendors from Spoolman."""
+    allowed_entities = {"spools", "filaments", "vendors"}
+    if entity not in allowed_entities:
+        return jsonify({"error": f"Invalid entity: {entity}"}), 400
+    try:
+        r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/export/{entity}", params=request.args)
+        r.raise_for_status()
+        return (r.content, r.status_code, {"Content-Type": r.headers.get("Content-Type", "application/json")})
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
 
 
 # ── Script Runners ────────────────────────────────────────────

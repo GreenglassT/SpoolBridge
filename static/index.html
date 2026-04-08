@@ -859,6 +859,13 @@ input::placeholder { color: var(--text-dim); }
       <select id="spool-filter-material">
         <option value="">All Materials</option>
       </select>
+      <select id="spool-filter-status">
+        <option value="">All Spools</option>
+        <option value="has-tag">Has Tag</option>
+        <option value="no-tag">No Tag</option>
+        <option value="in-tray">In Tray</option>
+        <option value="no-tray">Not in Tray</option>
+      </select>
       <select id="spool-sort">
         <option value="id">Sort: ID</option>
         <option value="name">Sort: Name</option>
@@ -1032,6 +1039,25 @@ input::placeholder { color: var(--text-dim); }
           <button class="btn btn-sm btn-ghost" onclick="checkBridge()">Refresh</button>
         </div>
       </div>
+      <div class="card">
+        <h3 style="font-size: 0.9rem; font-weight: 600; margin-bottom: 8px;">Database</h3>
+        <p class="muted" style="font-size: 0.8rem; margin-bottom: 16px;">
+          Backup and export Spoolman data.
+        </p>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button class="btn btn-sm btn-ghost" onclick="runBackup()">Backup DB</button>
+          <button class="btn btn-sm btn-ghost" onclick="exportAll('spools')">Export Spools</button>
+          <button class="btn btn-sm btn-ghost" onclick="exportAll('filaments')">Export Filaments</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 20px; max-width: 800px;">
+      <div class="section-header">
+        <span class="section-title">Tag & Tray Assignments</span>
+        <button class="btn btn-sm btn-ghost" style="color:var(--red); font-size:0.72rem;" onclick="clearStaleTrayAssignments()">Clear Stale</button>
+      </div>
+      <div id="tag-assignment-table" style="margin-bottom:16px;">Loading...</div>
     </div>
 
     <div style="margin-top: 20px; max-width: 800px;">
@@ -1108,24 +1134,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   fetchActivity();
   renderSpools();
   renderTagSpools();
+  renderTagAssignments();
   checkBridge();
   fetchPrinterStatus();
 
-  // Auto-refresh spools + printer status every 5 seconds
+  // Auto-refresh spools + printer status every 10 seconds
   setInterval(async () => {
     if (document.querySelector('#panel-dashboard.active')) {
       await loadSpools();
       renderDashboard();
       fetchPrinterStatus();
     }
-  }, 5000);
+  }, 10000);
 
-  // Activity feed on a slower 15-second interval
+  // Activity feed on a slower 30-second interval
   setInterval(() => {
     if (document.querySelector('#panel-dashboard.active')) {
       fetchActivity();
     }
-  }, 15000);
+  }, 30000);
 
   // Set Spoolman link
   try {
@@ -1208,7 +1235,7 @@ function renderTrayStatusFromSpools() {
   const trays = {"A1": null, "A2": null, "A3": null, "A4": null, "External": null};
   for (const s of spools) {
     const extra = s.extra || {};
-    let trayName = (extra.active_tray || '').replace(/"/g, '').trim();
+    let trayName = unquoteExtra(extra.active_tray);
     if (!trayName) continue;
     if (trayName.includes('_') && !trays.hasOwnProperty(trayName)) {
       const parts = trayName.split('_');
@@ -1529,8 +1556,8 @@ function spoolCard(s, selectable = false, expandable = false) {
                   expandable ? ` onclick="toggleSpoolDetail(${s.id})"` : '';
 
   const tagExtra = s.extra || {};
-  const hasTag = !!(tagExtra.tag && tagExtra.tag.replace(/"/g, '').trim());
-  const tagBadgeHtml = selectable
+  const hasTag = !!unquoteExtra(tagExtra.tag);
+  const tagBadgeHtml = (selectable || expandable)
     ? (hasTag ? '<span class="tag-badge tagged">NFC</span>' : '<span class="tag-badge not-tagged">No tag</span>')
     : '';
 
@@ -1557,8 +1584,8 @@ function spoolCard(s, selectable = false, expandable = false) {
 
   if (expandable && selectedSpoolId === s.id) {
     const extra = s.extra || {};
-    const activeTray = (extra.active_tray || '').replace(/"/g, '') || 'None';
-    const tag = (extra.tag || '').replace(/"/g, '') || 'None';
+    const activeTray = unquoteExtra(extra.active_tray) || 'None';
+    const tag = unquoteExtra(extra.tag) || 'None';
     const location = s.location || '';
     const price = f.price ? `$${f.price.toFixed(2)}` : '—';
     const isArchived = !!s.archived;
@@ -1572,7 +1599,7 @@ function spoolCard(s, selectable = false, expandable = false) {
         <div class="detail-item"><div class="form-label">Color</div><div class="detail-value">#${escHtml(color)}</div></div>
         <div class="detail-item"><div class="form-label">Brand</div><div class="detail-value">${escHtml(brand)}</div></div>
         <div class="detail-item"><div class="form-label">Price</div><div class="detail-value">${price}</div></div>
-        <div class="detail-item"><div class="form-label">RFID Tag</div><div class="detail-value mono" style="font-size:0.72rem;">${escHtml(tag)}</div></div>
+        <div class="detail-item"><div class="form-label">RFID Tag</div><div class="detail-value mono" style="font-size:0.72rem;">${escHtml(tag)}${tag !== 'None' ? ` <button class="btn btn-ghost btn-sm" style="color:var(--red); font-size:0.65rem; padding:1px 6px; margin-left:6px;" onclick="clearSpoolTag(${s.id})">Clear</button>` : ''}</div></div>
         <div class="detail-item"><div class="form-label">Remaining / Total</div><div class="detail-value mono">${remaining.toFixed(0)}g / ${total.toFixed(0)}g</div></div>
         <div class="detail-item"><div class="form-label">Status</div><div class="detail-value">${isArchived ? '<span style="color:var(--text-dim);">Archived</span>' : 'Active'}</div></div>
       </div>
@@ -1591,7 +1618,7 @@ function spoolCard(s, selectable = false, expandable = false) {
           <option value="A4"${activeTray === 'A4' ? ' selected' : ''}>Tray 4</option>
           <option value="External"${activeTray === 'External' ? ' selected' : ''}>External</option>
         </select>
-        <button class="btn btn-primary btn-sm" onclick="assignTray(${s.id})">Fill</button>
+        <button class="btn btn-primary btn-sm" onclick="assignTray(${s.id})">Fill</button>${activeTray !== 'None' ? `<button class="btn btn-ghost btn-sm" style="color:var(--red); font-size:0.72rem; padding:2px 8px;" onclick="clearSpoolTray(${s.id})">Clear</button>` : ''}
       </div>
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
         <label class="form-label" style="margin:0;">Update Weight:</label>
@@ -1616,6 +1643,7 @@ function renderSpools() {
   const search = (document.getElementById('spool-search')?.value || '').toLowerCase();
   const brandFilter = document.getElementById('spool-filter-brand')?.value || '';
   const matFilter = document.getElementById('spool-filter-material')?.value || '';
+  const statusFilter = document.getElementById('spool-filter-status')?.value || '';
   const sortBy = document.getElementById('spool-sort')?.value || 'id';
   const showArchived = document.getElementById('spool-show-archived')?.checked || false;
 
@@ -1639,6 +1667,14 @@ function renderSpools() {
     if (search && !text.includes(search)) return false;
     if (brandFilter && (f.vendor?.name || '') !== brandFilter) return false;
     if (matFilter && (f.material || '') !== matFilter) return false;
+    if (statusFilter) {
+      const hasTag = !!unquoteExtra((s.extra || {}).tag);
+      const inTray = !!unquoteExtra((s.extra || {}).active_tray);
+      if (statusFilter === 'has-tag' && !hasTag) return false;
+      if (statusFilter === 'no-tag' && hasTag) return false;
+      if (statusFilter === 'in-tray' && !inTray) return false;
+      if (statusFilter === 'no-tray' && inTray) return false;
+    }
     return true;
   });
 
@@ -1746,6 +1782,32 @@ async function assignTray(id) {
   }
 }
 
+async function clearSpoolTag(id) {
+  if (!confirm(`Clear RFID tag from spool #${id}? It will need to be re-linked via NFC.`)) return;
+  const s = spools.find(sp => sp.id === id);
+  const extra = { ...(s?.extra || {}), tag: '""' };
+  await patchSpool(id, { extra }, `Tag cleared from spool #${id}`);
+  renderTagSpools();
+  renderTagAssignments();
+}
+
+async function clearSpoolTray(id) {
+  try {
+    await postTrayAssign(id, '');
+    toast(`Spool #${id} unassigned from tray`, 'success');
+    const idx = spools.findIndex(s => s.id === id);
+    if (idx >= 0) {
+      spools[idx].extra = spools[idx].extra || {};
+      spools[idx].extra.active_tray = '""';
+    }
+    renderSpools();
+    renderDashboard();
+    renderTagAssignments();
+  } catch(e) {
+    toast('Failed to clear tray: ' + e.message, 'error');
+  }
+}
+
 async function archiveSpool(id, archive, name) {
   const action = archive ? 'Archive' : 'Unarchive';
   if (!confirm(`${action} "${name}" (spool #${id})?`)) return;
@@ -1769,7 +1831,7 @@ async function deleteSpool(id, name) {
 
 // Attach filter listeners
 document.addEventListener('DOMContentLoaded', () => {
-  ['spool-search', 'spool-filter-brand', 'spool-filter-material', 'spool-sort'].forEach(id => {
+  ['spool-search', 'spool-filter-brand', 'spool-filter-material', 'spool-filter-status', 'spool-sort'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', renderSpools);
   });
@@ -2134,6 +2196,97 @@ function setupSettings() {
 // Tools
 // ═══════════════════════════════════════════════════════════════
 
+function renderTagAssignments() {
+  const el = document.getElementById('tag-assignment-table');
+  if (!el) return;
+  const assigned = spools.filter(s => {
+    const extra = s.extra || {};
+    return !!unquoteExtra(extra.tag) || !!unquoteExtra(extra.active_tray);
+  });
+  if (!assigned.length) {
+    el.innerHTML = '<div class="muted" style="font-size:0.8rem;">No tag or tray assignments found.</div>';
+    return;
+  }
+  let html = `<table style="width:100%; font-size:0.8rem; border-collapse:collapse;">
+    <thead><tr style="text-align:left; border-bottom:1px solid var(--border);">
+      <th style="padding:4px 8px;">#</th>
+      <th style="padding:4px 8px;">Name</th>
+      <th style="padding:4px 8px;">Tag UID</th>
+      <th style="padding:4px 8px;">Tray</th>
+      <th style="padding:4px 8px;">Actions</th>
+    </tr></thead><tbody>`;
+  for (const s of assigned) {
+    const f = s.filament || {};
+    const extra = s.extra || {};
+    const tag = unquoteExtra(extra.tag);
+    const tray = unquoteExtra(extra.active_tray);
+    const tagDisplay = tag ? tag.substring(0, 12) + (tag.length > 12 ? '...' : '') : '—';
+    const color = f.color_hex || '888';
+    html += `<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:4px 8px;">${s.id}</td>
+      <td style="padding:4px 8px;"><span class="color-dot" style="background:#${escHtml(color)};"></span> ${escHtml(f.name || '?')}</td>
+      <td style="padding:4px 8px;" class="mono">${escHtml(tagDisplay)}</td>
+      <td style="padding:4px 8px;">${escHtml(tray || '—')}</td>
+      <td style="padding:4px 8px; display:flex; gap:4px;">
+        ${tag ? `<button class="btn btn-ghost btn-sm" style="color:var(--red); font-size:0.65rem; padding:1px 6px;" onclick="clearSpoolTag(${s.id})">Clear Tag</button>` : ''}
+        ${tray ? `<button class="btn btn-ghost btn-sm" style="color:var(--red); font-size:0.65rem; padding:1px 6px;" onclick="clearSpoolTray(${s.id})">Clear Tray</button>` : ''}
+      </td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function clearStaleTrayAssignments() {
+  try {
+    const status = await api('/api/printer-status');
+    const printerTrays = status.ams_trays || {};
+    // Build set of tray names the printer currently reports
+    const activeTrays = new Set();
+    for (const [key, data] of Object.entries(printerTrays)) {
+      if (data && data.type) {
+        const trayNum = parseInt(key.split('_')[1]) + 1;
+        activeTrays.add('A' + trayNum);
+      }
+    }
+    if (status.vt_tray && status.vt_tray.type) activeTrays.add('External');
+
+    const stale = spools.filter(s => {
+      const tray = unquoteExtra((s.extra || {}).active_tray);
+      return tray && !activeTrays.has(tray);
+    });
+    await Promise.all(stale.map(s => postTrayAssign(s.id, '')));
+    for (const s of stale) {
+      s.extra = s.extra || {};
+      s.extra.active_tray = '""';
+    }
+    const cleared = stale.length;
+    if (cleared > 0) {
+      toast(`Cleared ${cleared} stale tray assignment${cleared > 1 ? 's' : ''}`, 'success');
+      renderTagAssignments();
+      renderSpools();
+      renderDashboard();
+    } else {
+      toast('No stale assignments found', 'success');
+    }
+  } catch(e) {
+    toast('Failed to check stale assignments: ' + e.message, 'error');
+  }
+}
+
+async function runBackup() {
+  try {
+    await api('/api/backup', { method: 'POST' });
+    toast('Spoolman backup created', 'success');
+  } catch(e) {
+    toast('Backup failed: ' + e.message, 'error');
+  }
+}
+
+function exportAll(entity) {
+  window.open('/api/export/' + entity + '?fmt=csv', '_blank');
+}
+
 async function runSyncAms() {
   const btn = document.getElementById('btn-sync-ams');
   const log = document.getElementById('tool-log');
@@ -2183,6 +2336,10 @@ async function checkBridge() {
 
 function escHtml(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function unquoteExtra(val) {
+  return (val || '').replace(/"/g, '').trim();
 }
 
 async function renderPrintHistory() {
@@ -2324,8 +2481,7 @@ function renderUsageChart() {
     const pct = total > 0 ? (remaining / total) * 100 : 100;
     // Include tray position if assigned, to disambiguate duplicates
     const extra = s.extra || {};
-    let tray = (extra.active_tray || '').replace(/"/g, '').trim();
-    // Normalize old-format keys like "22E8AJ5C1000237_0_1" → "A2"
+    let tray = unquoteExtra(extra.active_tray);
     if (tray && tray.includes('_')) {
       const parts = tray.split('_');
       const idx = parseInt(parts[parts.length - 1], 10);

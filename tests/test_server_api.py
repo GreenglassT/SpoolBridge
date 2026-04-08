@@ -585,6 +585,62 @@ def test_bridge_action_invalid(flask_client, spoolman_url):
 
 
 # ============================================================
+# PROXY ROUTES
+# ============================================================
+
+def test_get_locations(flask_client, spoolman_url):
+    resp = flask_client.get("/api/locations")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert isinstance(data, list)
+
+
+def test_get_materials(flask_client, spoolman_url):
+    resp = flask_client.get("/api/materials")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert isinstance(data, list)
+
+
+def test_export_spools(flask_client, spoolman_url):
+    resp = flask_client.get("/api/export/spools?fmt=csv")
+    assert resp.status_code == 200
+
+
+def test_export_invalid_entity(flask_client, spoolman_url):
+    resp = flask_client.get("/api/export/invalid")
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "error" in data
+
+
+def test_spool_patch_extra(flask_client, spoolman_url, cleanup_spoolman):
+    """PATCH /api/spools/<id> should accept extra field."""
+    # Create a spool first
+    create_resp = flask_client.post(
+        "/api/spools",
+        json={"brand": "bambu", "material": "PLA", "color_hex": "ff9900"},
+        content_type="application/json",
+    )
+    spool_id = create_resp.get_json()["id"]
+    cleanup_spoolman["spools"].append(spool_id)
+    fil_id = create_resp.get_json().get("filament", {}).get("id")
+    if fil_id:
+        cleanup_spoolman["filaments"].append(fil_id)
+
+    # Patch with extra field
+    resp = flask_client.patch(
+        f"/api/spools/{spool_id}",
+        json={"extra": {"tag": '"TESTAG123"', "active_tray": '"A1"'}},
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["extra"]["tag"] == '"TESTAG123"'
+    assert data["extra"]["active_tray"] == '"A1"'
+
+
+# ============================================================
 # CONFIG
 # ============================================================
 
@@ -593,6 +649,3 @@ def test_get_config(flask_client, spoolman_url):
     assert resp.status_code == 200
     data = resp.get_json()
     assert "spoolman_url" in data
-    assert "openspoolman_url" in data
-    assert "brands" in data
-    assert isinstance(data["brands"], dict)

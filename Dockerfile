@@ -7,7 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY config.py bridge.py server.py write_tags.py ./
 COPY static/ ./static/
-COPY docs/ ./docs/
 
 EXPOSE 5555
 

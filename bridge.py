@@ -34,7 +34,7 @@ import requests
 from config import (
     load_env, TRAY_EXTERNAL,
     get_openspool_type, get_filament_code, tray_location,
-    extra_quote, extra_unquote,
+    extra_quote, extra_unquote, is_real_tag,
 )
 
 load_env()
@@ -162,7 +162,7 @@ def find_spool_by_color_material(color_hex, material, spools=None):
 
 def find_spool_by_tag(tag_uid, tray_uuid="", spools=None):
     """Find a Spoolman spool by RFID tag UID or Bambu tray UUID."""
-    if not tag_uid and not tray_uuid:
+    if not is_real_tag(tag_uid) and not is_real_tag(tray_uuid):
         return None
     if spools is None:
         spools = sm_get("spool")
@@ -296,7 +296,7 @@ def sync_remain_to_spoolman():
 
         tag_uid = tray_data.get("tag_uid", "")
         tray_uuid = tray_data.get("tray_uuid", "")
-        if not tag_uid and not tray_uuid:
+        if not is_real_tag(tag_uid) and not is_real_tag(tray_uuid):
             continue
 
         spool = find_spool_by_tag(tag_uid, tray_uuid, spools=all_spools)
@@ -315,9 +315,21 @@ def sync_remain_to_spoolman():
             log.warning(f"Failed to sync {tray_name} weight: {e}")
 
 
-def update_spool_tray(spool_id, tray_name):
-    """Set which tray a spool is in."""
+def update_spool_tray(spool_id, tray_name, all_spools=None):
+    """Set which tray a spool is in, evicting any other spool from the same tray."""
     try:
+        # Clear active_tray from any other spool currently assigned to this tray
+        for s in (all_spools if all_spools is not None else sm_get("spool")):
+            if s["id"] == spool_id:
+                continue
+            existing_tray = extra_unquote(
+                (s.get("extra") or {}).get("active_tray", "")
+            )
+            if existing_tray == tray_name:
+                sm_patch(f"spool/{s['id']}", {
+                    "extra": {"active_tray": extra_quote("")},
+                })
+                log.info(f"Evicted spool #{s['id']} from {tray_name}")
         sm_patch(f"spool/{spool_id}", {
             "extra": {"active_tray": extra_quote(tray_name)},
             "location": tray_location(tray_name),
@@ -422,9 +434,12 @@ def log_event(event_type, tray="", spool_id=None, spool_name="", detail=""):
         log.error(f"Failed to write activity.json: {e}")
 
 
+_print_line_count = 0
+
 def log_print(spool_id, spool_name, material, color_hex, grams_used, status,
               print_name="", duration=0):
-    """Append a print record to prints.json (JSON-lines, append-only)."""
+    """Append a print record to prints.json (JSON-lines, capped at 500 entries)."""
+    global _print_line_count
     try:
         path = SCRIPT_DIR / "prints.json"
         entry = json.dumps({
@@ -438,8 +453,15 @@ def log_print(spool_id, spool_name, material, color_hex, grams_used, status,
             "print_name": print_name,
             "duration": duration,
         })
+        if _print_line_count == 0 and path.exists():
+            _print_line_count = sum(1 for _ in open(path))
         with open(path, "a") as f:
             f.write(entry + "\n")
+        _print_line_count += 1
+        if _print_line_count > 500:
+            lines = path.read_text().strip().splitlines()[-500:]
+            path.write_text("\n".join(lines) + "\n")
+            _print_line_count = len(lines)
     except Exception as e:
         log.error(f"Failed to write prints.json: {e}")
 
@@ -727,7 +749,7 @@ def handle_ams_change(new_trays):
         for slot_key, tray_data in new_trays.items():
             tag_uid = tray_data.get("tag_uid", "")
             tray_uuid = tray_data.get("tray_uuid", "")
-            if tag_uid or tray_uuid:
+            if is_real_tag(tag_uid) or is_real_tag(tray_uuid):
                 spool = find_spool_by_tag(tag_uid, tray_uuid, spools=all_spools)
                 if not spool:
                     tray_num = int(slot_key.split("_")[1]) + 1
@@ -739,7 +761,7 @@ def handle_ams_change(new_trays):
                     if spool:
                         all_spools.append(spool)
                 else:
-                    update_spool_tray(spool["id"], f"A{int(slot_key.split('_')[1]) + 1}")
+                    update_spool_tray(spool["id"], f"A{int(slot_key.split('_')[1]) + 1}", all_spools=all_spools)
         return
 
     # Compare only identity fields (not nozzle temps or net_weight which can fluctuate)
@@ -757,7 +779,7 @@ def handle_ams_change(new_trays):
         tray_uuid = tray_data.get("tray_uuid", "")
         tray_num = int(slot_key.split("_")[1]) + 1
 
-        if tag_uid or tray_uuid:
+        if is_real_tag(tag_uid) or is_real_tag(tray_uuid):
             spool = find_spool_by_tag(tag_uid, tray_uuid, spools=all_spools)
             if not spool:
                 # Auto-create Bambu spool from RFID data
@@ -769,7 +791,7 @@ def handle_ams_change(new_trays):
                     f"AMS Tray {tray_num}: {f.get('name', '?')} "
                     f"(spool #{spool['id']}, tag {tag_uid[:8]}...)"
                 )
-                update_spool_tray(spool["id"], f"A{tray_num}")
+                update_spool_tray(spool["id"], f"A{tray_num}", all_spools=all_spools)
                 log_event("tray_load", tray=f"A{tray_num}", spool_id=spool["id"], spool_name=f.get("name", "?"), detail=f"tag {tag_uid[:8]}...")
                 unknown_spools.pop(slot_key, None)
             else:
@@ -794,7 +816,7 @@ def handle_ams_change(new_trays):
                     f"AMS Tray {tray_num}: Matched by color → "
                     f"{f.get('name', '?')} (spool #{spool['id']})"
                 )
-                update_spool_tray(spool["id"], f"A{tray_num}")
+                update_spool_tray(spool["id"], f"A{tray_num}", all_spools=all_spools)
                 log_event("tray_load", tray=f"A{tray_num}", spool_id=spool["id"], spool_name=f.get("name", "?"), detail="color match")
             else:
                 log.info(f"AMS Tray {tray_num}: No match for {tray_data['type']} #{tray_data['color']}")
@@ -963,7 +985,7 @@ def on_message(client, userdata, msg):
             if tray_data:
                 tag_uid = tray_data.get("tag_uid", "")
                 tray_uuid = tray_data.get("tray_uuid", "")
-                if tag_uid or tray_uuid:
+                if is_real_tag(tag_uid) or is_real_tag(tray_uuid):
                     spool = find_spool_by_tag(tag_uid, tray_uuid)
                     if spool:
                         active_spool_id = spool["id"]

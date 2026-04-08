@@ -118,7 +118,7 @@ def test_ams_change_by_tag(mock_sm, mock_find_tag, mock_find_color, mock_update_
 
     mock_find_tag.assert_called_once()
     # tray_num = int("1") + 1 = 2, so tray name is "A2"
-    mock_update_tray.assert_called_once_with(7, "A2")
+    mock_update_tray.assert_called_once_with(7, "A2", all_spools=[])
 
 
 @patch("bridge.log_event")
@@ -171,7 +171,7 @@ def test_ams_change_no_tag_color_match(mock_sm, mock_find_tag, mock_find_color, 
     bridge.handle_ams_change(new_trays)
 
     # tray_num = int("0") + 1 = 1 → "A1"
-    mock_update_tray.assert_called_once_with(15, "A1")
+    mock_update_tray.assert_called_once_with(15, "A1", all_spools=[])
 
 
 @patch("bridge.log_event")

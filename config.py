@@ -43,6 +43,11 @@ def extra_unquote(value):
     return (value or "").strip('"').strip()
 
 
+def is_real_tag(tag):
+    """Return True if the tag is a real RFID value (not empty/all-zeros)."""
+    return bool(tag) and tag.strip("0") != ""
+
+
 def tray_location(tray):
     """Map a tray name to its Spoolman location string."""
     if tray and tray.startswith("A"):

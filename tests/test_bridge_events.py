@@ -116,6 +116,34 @@ def test_log_print_creates_file(tmp_scripts_dir):
     assert "ts" in record
 
 
+def test_log_print_caps_at_500(tmp_scripts_dir):
+    """prints.json is trimmed to 500 entries when it exceeds the cap."""
+    prints_path = tmp_scripts_dir / "prints.json"
+
+    # Pre-fill with 499 entries
+    entries = []
+    for i in range(499):
+        entry = json.dumps({"ts": "2024-01-01", "spool_id": i, "spool_name": "X",
+                            "material": "PLA", "color_hex": "000000",
+                            "grams_used": 1.0, "status": "finish",
+                            "print_name": "", "duration": 0})
+        entries.append(entry)
+    prints_path.write_text("\n".join(entries) + "\n")
+
+    # Add 2 more — second pushes to 501, triggering trim
+    log_print(spool_id=500, spool_name="A", material="PLA",
+              color_hex="000000", grams_used=1.0, status="finish")
+    log_print(spool_id=501, spool_name="B", material="PLA",
+              color_hex="000000", grams_used=1.0, status="finish")
+
+    lines = prints_path.read_text().strip().splitlines()
+    assert len(lines) == 500
+
+    # Last entry should be the most recent
+    last = json.loads(lines[-1])
+    assert last["spool_id"] == 501
+
+
 # ============================================================
 # write_bridge_state
 # ============================================================
