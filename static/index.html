@@ -1825,6 +1825,7 @@ function openSwapModal(trayKey, label, currentSpool) {
   document.getElementById('swap-search-input').value = '';
   document.getElementById('swap-confirm').style.display = 'none';
   document.getElementById('swap-list').style.display = 'block';
+  document.getElementById('swap-search-input').closest('.swap-search').style.display = '';
   renderSwapList('');
   document.getElementById('swap-overlay').classList.add('open');
   document.getElementById('swap-search-input').focus();
@@ -1859,7 +1860,20 @@ function renderSwapList(query) {
     return;
   }
 
-  list.innerHTML = filtered.map(s => {
+  // Show unload option at top if tray is occupied
+  let unloadHtml = '';
+  if (swapCurrentSpool && !q) {
+    unloadHtml = `
+      <div class="swap-spool" onclick="unloadSwapTray()" style="border-bottom:1px solid var(--border); margin-bottom:4px; padding-bottom:12px;">
+        <div class="swatch" style="background:var(--bg-input); border-style:dashed;"></div>
+        <div class="info">
+          <div class="name" style="color:var(--red);">Unload Tray</div>
+          <div class="meta">Remove current spool from tray</div>
+        </div>
+      </div>`;
+  }
+
+  list.innerHTML = unloadHtml + filtered.map(s => {
     const fil = s.filament;
     const vendor = fil.vendor || {};
     const pct = fil.weight ? Math.round((s.remaining_weight / fil.weight) * 100) : 0;
@@ -1903,6 +1917,18 @@ function selectSwapSpool(spoolId) {
       <button class="btn btn-primary" onclick="confirmSwap(${spoolId})">Confirm</button>
     </div>`;
   confirm.style.display = 'block';
+}
+
+async function unloadSwapTray() {
+  try {
+    await postTrayAssign(swapCurrentSpool.spool_id, '');
+    toast(`Unloaded ${swapCurrentSpool.name || 'spool'} from ${swapTrayKey}`, 'success');
+    closeSwapModal();
+    await loadSpools();
+    renderDashboard();
+  } catch(e) {
+    toast('Failed to unload: ' + e.message, 'error');
+  }
 }
 
 function cancelSwapConfirm() {

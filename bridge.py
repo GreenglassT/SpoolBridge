@@ -351,6 +351,19 @@ def update_spool_tray(spool_id, tray_name, all_spools=None):
         log.error(f"Failed to update spool #{spool_id}: {e}")
 
 
+def clear_tray_assignment(tray_name, all_spools=None):
+    """Clear active_tray from any spool assigned to the given tray."""
+    for s in (all_spools if all_spools is not None else sm_get("spool")):
+        existing_tray = extra_unquote(
+            (s.get("extra") or {}).get("active_tray", "")
+        )
+        if existing_tray == tray_name:
+            sm_patch(f"spool/{s['id']}", {
+                "extra": {"active_tray": extra_quote("")},
+            })
+            log.info(f"Cleared spool #{s['id']} from {tray_name} (slot now empty)")
+
+
 def update_spool_weight(spool_id, used_grams):
     """Subtract used filament from a spool's remaining weight."""
     try:
@@ -568,17 +581,16 @@ def parse_ams_trays(msg_data):
             slot_key = f"A{ams_id}_{tray_id}"
             tray_type = tray.get("tray_type", "")
 
-            if tray_type:
-                trays[slot_key] = {
-                    "type": tray_type,
-                    "color": (tray.get("tray_color") or "")[:6],
-                    "tag_uid": tray.get("tag_uid", ""),
-                    "tray_uuid": tray.get("tray_uuid", ""),
-                    "sub_brand": tray.get("tray_sub_brands", ""),
-                    "nozzle_min": int(tray.get("nozzle_temp_min", 0)),
-                    "nozzle_max": int(tray.get("nozzle_temp_max", 0)),
-                    "net_weight": int(tray.get("tray_weight", 0)),
-                }
+            trays[slot_key] = {
+                "type": tray_type,
+                "color": (tray.get("tray_color") or "")[:6],
+                "tag_uid": tray.get("tag_uid", ""),
+                "tray_uuid": tray.get("tray_uuid", ""),
+                "sub_brand": tray.get("tray_sub_brands", ""),
+                "nozzle_min": int(tray.get("nozzle_temp_min", 0)),
+                "nozzle_max": int(tray.get("nozzle_temp_max", 0)),
+                "net_weight": int(tray.get("tray_weight", 0)),
+            }
 
     return trays
 
@@ -741,26 +753,33 @@ def handle_ams_change(new_trays):
         _bridge_state_dirty = True
         log.info(f"AMS baseline: {len(new_trays)} trays loaded")
 
-        # Auto-create any Bambu spools not yet in Spoolman
+        # Auto-create any Bambu spools not yet in Spoolman, clear empty slots
         all_spools = sm_get("spool")
         cached_vendors = sm_get("vendor")
         cached_filaments = sm_get("filament")
         for slot_key, tray_data in new_trays.items():
+            tray_num = int(slot_key.split("_")[1]) + 1
+            tray_name = f"A{tray_num}"
+
+            # Empty slot — clear any stale Spoolman assignment
+            if not tray_data.get("type"):
+                clear_tray_assignment(tray_name, all_spools=all_spools)
+                continue
+
             tag_uid = tray_data.get("tag_uid", "")
             tray_uuid = tray_data.get("tray_uuid", "")
             if is_real_tag(tag_uid) or is_real_tag(tray_uuid):
                 spool = find_spool_by_tag(tag_uid, tray_uuid, spools=all_spools)
                 if not spool:
-                    tray_num = int(slot_key.split("_")[1]) + 1
-                    remain = ams_tray_remain.get(f"A{tray_num}")
+                    remain = ams_tray_remain.get(tray_name)
                     spool = auto_create_bambu_spool(
-                        tray_data, f"A{tray_num}", remain_pct=remain,
+                        tray_data, tray_name, remain_pct=remain,
                         vendors=cached_vendors, filaments=cached_filaments,
                     )
                     if spool:
                         all_spools.append(spool)
                 else:
-                    update_spool_tray(spool["id"], f"A{int(slot_key.split('_')[1]) + 1}", all_spools=all_spools)
+                    update_spool_tray(spool["id"], tray_name, all_spools=all_spools)
         return
 
     # Compare only identity fields (not nozzle temps or net_weight which can fluctuate)
@@ -773,34 +792,45 @@ def handle_ams_change(new_trays):
 
     for slot_key in changed:
         tray_data = new_trays[slot_key]
+        tray_num = int(slot_key.split("_")[1]) + 1
+        tray_name = f"A{tray_num}"
+
+        # Slot is now empty — clear any Spoolman assignment
+        if not tray_data.get("type"):
+            log.info(f"AMS Tray {tray_num}: now empty")
+            clear_tray_assignment(tray_name, all_spools=all_spools)
+            log_event("tray_unload", tray=tray_name, detail="slot empty")
+            unknown_spools.pop(slot_key, None)
+            current_ams_trays[slot_key] = tray_data
+            _bridge_state_dirty = True
+            continue
 
         tag_uid = tray_data.get("tag_uid", "")
         tray_uuid = tray_data.get("tray_uuid", "")
-        tray_num = int(slot_key.split("_")[1]) + 1
 
         if is_real_tag(tag_uid) or is_real_tag(tray_uuid):
             spool = find_spool_by_tag(tag_uid, tray_uuid, spools=all_spools)
             if not spool:
                 # Auto-create Bambu spool from RFID data
-                remain = ams_tray_remain.get(f"A{tray_num}")
-                spool = auto_create_bambu_spool(tray_data, f"A{tray_num}", remain_pct=remain)
+                remain = ams_tray_remain.get(tray_name)
+                spool = auto_create_bambu_spool(tray_data, tray_name, remain_pct=remain)
             if spool:
                 f = spool.get("filament", {})
                 log.info(
                     f"AMS Tray {tray_num}: {f.get('name', '?')} "
                     f"(spool #{spool['id']}, tag {tag_uid[:8]}...)"
                 )
-                update_spool_tray(spool["id"], f"A{tray_num}", all_spools=all_spools)
-                log_event("tray_load", tray=f"A{tray_num}", spool_id=spool["id"], spool_name=f.get("name", "?"), detail=f"tag {tag_uid[:8]}...")
+                update_spool_tray(spool["id"], tray_name, all_spools=all_spools)
+                log_event("tray_load", tray=tray_name, spool_id=spool["id"], spool_name=f.get("name", "?"), detail=f"tag {tag_uid[:8]}...")
                 unknown_spools.pop(slot_key, None)
             else:
                 log.info(
                     f"AMS Tray {tray_num}: Failed to create spool for tag {tag_uid[:8]}... "
                     f"({tray_data['type']} #{tray_data['color']})"
                 )
-                log_event("tray_load", tray=f"A{tray_num}", detail=f"Unknown tag {tag_uid[:8]}... ({tray_data['type']} #{tray_data['color']})")
+                log_event("tray_load", tray=tray_name, detail=f"Unknown tag {tag_uid[:8]}... ({tray_data['type']} #{tray_data['color']})")
                 unknown_spools[slot_key] = {
-                    "tray": f"A{tray_num}",
+                    "tray": tray_name,
                     "type": tray_data["type"],
                     "color": tray_data["color"],
                     "tag_uid": tag_uid,
@@ -815,11 +845,11 @@ def handle_ams_change(new_trays):
                     f"AMS Tray {tray_num}: Matched by color → "
                     f"{f.get('name', '?')} (spool #{spool['id']})"
                 )
-                update_spool_tray(spool["id"], f"A{tray_num}", all_spools=all_spools)
-                log_event("tray_load", tray=f"A{tray_num}", spool_id=spool["id"], spool_name=f.get("name", "?"), detail="color match")
+                update_spool_tray(spool["id"], tray_name, all_spools=all_spools)
+                log_event("tray_load", tray=tray_name, spool_id=spool["id"], spool_name=f.get("name", "?"), detail="color match")
             else:
                 log.info(f"AMS Tray {tray_num}: No match for {tray_data['type']} #{tray_data['color']}")
-                log_event("tray_load", tray=f"A{tray_num}", detail=f"Unmatched: {tray_data['type']} #{tray_data['color']}")
+                log_event("tray_load", tray=tray_name, detail=f"Unmatched: {tray_data['type']} #{tray_data['color']}")
 
         current_ams_trays[slot_key] = tray_data
         _bridge_state_dirty = True

@@ -100,7 +100,7 @@ def test_parse_ams_trays_single_unit():
 
 
 def test_parse_ams_trays_empty_slots():
-    """Trays with an empty tray_type are skipped."""
+    """Empty slots (tray_type='') are included with type=''."""
     msg_data = {
         "print": {
             "ams": {
@@ -119,11 +119,11 @@ def test_parse_ams_trays_empty_slots():
         }
     }
     result = parse_ams_trays(msg_data)
-    assert len(result) == 2
-    assert "A0_0" in result
-    assert "A0_2" in result
-    assert "A0_1" not in result
-    assert "A0_3" not in result
+    assert len(result) == 4
+    assert result["A0_0"]["type"] == "PLA"
+    assert result["A0_1"]["type"] == ""
+    assert result["A0_2"]["type"] == "PETG"
+    assert result["A0_3"]["type"] == ""
 
 
 def test_parse_ams_trays_multi_unit():
