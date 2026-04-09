@@ -725,6 +725,7 @@ input::placeholder { color: var(--text-dim); }
 .print-entry .print-name { font-weight: 500; font-size: 0.85rem; }
 .print-entry .print-meta { font-size: 0.75rem; color: var(--text-muted); }
 .print-entry .print-grams { font-family: var(--mono); font-size: 0.85rem; font-weight: 500; color: var(--accent); white-space: nowrap; }
+.print-cost { font-family: var(--mono); font-size: 0.72rem; color: var(--green); margin-top: 2px; }
 .print-entry .print-status-failed { color: var(--red); }
 
 /* ── Spool Detail Panel ────────────────────────────────────── */
@@ -2525,6 +2526,15 @@ async function renderPrintHistory() {
       const statusLabel = p.status === 'failed' ? ' (FAILED)' : '';
       const printName = p.print_name ? `<div class="print-job-name">${escHtml(p.print_name)}</div>` : '';
       const dur = p.duration ? `<span style="color:var(--text-muted);"> · ${formatDuration(p.duration)}</span>` : '';
+      // Per-print cost estimate
+      let costHtml = '';
+      if (p.grams_used > 0 && p.spool_id) {
+        const spool = spools.find(s => s.id === p.spool_id);
+        if (spool && spool.filament?.price && spool.filament?.weight) {
+          const cost = (p.grams_used / spool.filament.weight) * spool.filament.price;
+          costHtml = `<div class="print-cost">$${cost.toFixed(2)}</div>`;
+        }
+      }
       return `
         <div class="print-entry">
           <div class="print-swatch" style="background:#${p.color_hex || '333'};"></div>
@@ -2533,7 +2543,10 @@ async function renderPrintHistory() {
             <div class="print-name${statusClass}">${escHtml(p.spool_name || 'Unknown')}${statusLabel}</div>
             <div class="print-meta">${escHtml(p.material || '?')} · ${escHtml(date)}${dur}</div>
           </div>
-          <div class="print-grams${statusClass}">-${(p.grams_used ?? 0).toFixed(1)}g</div>
+          <div style="text-align:right;">
+            <div class="print-grams${statusClass}">-${(p.grams_used ?? 0).toFixed(1)}g</div>
+            ${costHtml}
+          </div>
         </div>`;
     }).join('');
   } catch(e) { console.error('Failed to load print history', e); }
