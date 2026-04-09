@@ -1316,27 +1316,13 @@ function renderTrayStrip(trays) {
     const amsRemain = remain[slot.key];
     const remainHtml = (amsRemain !== undefined && !isExternal)
       ? `<div class="tray-remain">${amsRemain}% remaining</div>` : '';
-    // Build spool picker options for this tray
-    const pickerOptions = spools
-      .filter(s => !s.archived && s.filament)
-      .map(s => `<option value="${s.id}">${escHtml(s.filament.name || 'Unknown')} (${(s.remaining_weight||0).toFixed(0)}g)</option>`)
-      .join('');
-    const pickerId = `tray-picker-${slot.key}`;
-    const pickerHtml = `
-      <div style="margin-top:6px; display:flex; gap:4px; align-items:center;">
-        <select id="${pickerId}" style="flex:1; font-size:0.7rem; padding:2px 4px;">
-          <option value="">Load spool...</option>
-          ${pickerOptions}
-        </select>
-        <button class="btn btn-primary btn-sm" style="font-size:0.65rem; padding:2px 6px;" onclick="loadTrayFromPicker('${slot.key}','${pickerId}')">Go</button>
-      </div>`;
-
     if (t) {
       const pct = Math.round((t.remaining_weight / t.total_weight) * 100);
       const barColor = pct > 30 ? 'var(--green)' : pct > 10 ? 'var(--yellow)' : 'var(--red)';
       const labelColor = isExternal ? 'color:var(--accent);' : '';
+      const currentSpool = JSON.stringify({name: t.name, brand: t.brand, spool_id: t.spool_id}).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
       html += `
-        <div class="tray-slot occupied" style="${borderStyle}">
+        <div class="tray-slot occupied" style="${borderStyle} cursor:pointer;" onclick="openSwapModal('${slot.key}','${slot.label}',${currentSpool})">
           <div class="tray-label" style="${labelColor}">${slot.label}</div>
           <div class="tray-swatch" style="background:#${t.color_hex};"></div>
           <div class="tray-name">${escHtml(t.name)}</div>
@@ -1346,21 +1332,16 @@ function renderTrayStrip(trays) {
           <div class="weight-bar" style="width:100%; margin-top:4px;">
             <div class="weight-bar-fill" style="width:${pct}%; background:${barColor};"></div>
           </div>
-          <div style="margin-top:8px;display:flex;gap:12px;justify-content:center;">
-            <a href="#" onclick="event.preventDefault();${isExternal ? `unloadExternalTray(${t.spool_id})` : `clearSpoolTray(${t.spool_id})`}" class="detail-link" style="font-size:0.72rem;color:var(--red);">Unload</a>
-          </div>
-          ${pickerHtml}
         </div>`;
     } else {
       const labelColor = isExternal ? 'color:var(--accent);' : '';
       const dashStyle = isExternal ? 'border-color:var(--accent);' : '';
       html += `
-        <div class="tray-slot empty-tray" style="${dashStyle}">
+        <div class="tray-slot empty-tray" style="${dashStyle} cursor:pointer;" onclick="openSwapModal('${slot.key}','${slot.label}',null)">
           <div class="tray-label" style="${labelColor}">${slot.label}</div>
           <div class="tray-swatch" style="background:var(--bg-input); border-style:dashed;"></div>
           <div class="tray-meta" style="color:var(--text-dim);">Empty</div>
           ${remainHtml}
-          ${pickerHtml}
         </div>`;
     }
   }
@@ -1832,23 +1813,6 @@ async function postTrayAssign(spoolId, tray) {
   return r.json();
 }
 
-async function loadTrayFromPicker(trayKey, pickerId) {
-  const select = document.getElementById(pickerId);
-  const spoolId = parseInt(select.value);
-  if (!spoolId) return;
-  try {
-    if (trayKey === 'External') {
-      await api(`/api/load-external/${spoolId}`, { method: 'POST' });
-    } else {
-      await postTrayAssign(spoolId, trayKey);
-    }
-    toast(`Loaded spool #${spoolId} into ${trayKey}`, 'success');
-    await loadSpools();
-    renderDashboard();
-  } catch(e) {
-    toast('Failed to load tray: ' + e.message, 'error');
-  }
-}
 
 // ── Swap Modal ──────────────────────────────────────────────
 let swapTrayKey = null;    // which tray we're swapping into
