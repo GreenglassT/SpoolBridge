@@ -1850,6 +1850,121 @@ async function loadTrayFromPicker(trayKey, pickerId) {
   }
 }
 
+// ── Swap Modal ──────────────────────────────────────────────
+let swapTrayKey = null;    // which tray we're swapping into
+let swapCurrentSpool = null; // spool currently in that tray (or null)
+
+function openSwapModal(trayKey, label, currentSpool) {
+  swapTrayKey = trayKey;
+  swapCurrentSpool = currentSpool;
+  document.getElementById('swap-title').textContent = `Load Spool → ${label}`;
+  document.getElementById('swap-search-input').value = '';
+  document.getElementById('swap-confirm').style.display = 'none';
+  document.getElementById('swap-list').style.display = 'block';
+  renderSwapList('');
+  document.getElementById('swap-overlay').classList.add('open');
+  document.getElementById('swap-search-input').focus();
+}
+
+function closeSwapModal() {
+  document.getElementById('swap-overlay').classList.remove('open');
+  swapTrayKey = null;
+  swapCurrentSpool = null;
+}
+
+function filterSwapList() {
+  const q = document.getElementById('swap-search-input').value;
+  renderSwapList(q);
+}
+
+function renderSwapList(query) {
+  const list = document.getElementById('swap-list');
+  const q = query.toLowerCase().trim();
+  const filtered = spools.filter(s => {
+    if (s.archived) return false;
+    if (!s.filament) return false;
+    if (!q) return true;
+    const fil = s.filament;
+    const vendor = fil.vendor || {};
+    const haystack = [fil.name, fil.material, fil.color_hex, vendor.name].filter(Boolean).join(' ').toLowerCase();
+    return haystack.includes(q);
+  });
+
+  if (filtered.length === 0) {
+    list.innerHTML = '<div style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.85rem;">No spools found</div>';
+    return;
+  }
+
+  list.innerHTML = filtered.map(s => {
+    const fil = s.filament;
+    const vendor = fil.vendor || {};
+    const pct = fil.weight ? Math.round((s.remaining_weight / fil.weight) * 100) : 0;
+    const pctColor = pct > 30 ? 'var(--green)' : pct > 10 ? 'var(--yellow)' : 'var(--red)';
+    const pctBg = pct > 30 ? 'var(--green-dim)' : pct > 10 ? 'var(--yellow-dim)' : 'var(--red-dim)';
+    const priceStr = fil.price && fil.weight ? ` · $${(fil.price / fil.weight * 1000).toFixed(2)}/kg` : '';
+    return `
+      <div class="swap-spool" onclick="selectSwapSpool(${s.id})">
+        <div class="swatch" style="background:#${fil.color_hex || '333'};"></div>
+        <div class="info">
+          <div class="name">${escHtml(fil.name || 'Unknown')}${vendor.name ? ' — ' + escHtml(vendor.name) : ''}</div>
+          <div class="meta">${s.remaining_weight.toFixed(0)}g remaining${priceStr}</div>
+        </div>
+        <div class="pct-badge" style="background:${pctBg}; color:${pctColor};">${pct}%</div>
+      </div>`;
+  }).join('');
+}
+
+function selectSwapSpool(spoolId) {
+  const spool = spools.find(s => s.id === spoolId);
+  if (!spool) return;
+  const fil = spool.filament || {};
+  const newName = fil.name || 'Unknown';
+
+  document.getElementById('swap-list').style.display = 'none';
+  document.getElementById('swap-search-input').closest('.swap-search').style.display = 'none';
+  const confirm = document.getElementById('swap-confirm');
+
+  let summary;
+  if (swapCurrentSpool) {
+    const oldName = swapCurrentSpool.name || 'Unknown';
+    summary = `Swap <strong>${escHtml(oldName)}</strong> → <strong>${escHtml(newName)}</strong> in ${document.getElementById('swap-title').textContent.split('→')[1].trim()}?`;
+  } else {
+    summary = `Load <strong>${escHtml(newName)}</strong> into ${document.getElementById('swap-title').textContent.split('→')[1].trim()}?`;
+  }
+
+  confirm.innerHTML = `
+    <div class="swap-summary">${summary}</div>
+    <div class="swap-actions">
+      <button class="btn btn-ghost" onclick="cancelSwapConfirm()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmSwap(${spoolId})">Confirm</button>
+    </div>`;
+  confirm.style.display = 'block';
+}
+
+function cancelSwapConfirm() {
+  document.getElementById('swap-confirm').style.display = 'none';
+  document.getElementById('swap-list').style.display = 'block';
+  document.getElementById('swap-search-input').closest('.swap-search').style.display = 'block';
+}
+
+async function confirmSwap(spoolId) {
+  try {
+    if (swapTrayKey === 'External') {
+      await api(`/api/load-external/${spoolId}`, { method: 'POST' });
+    } else {
+      await postTrayAssign(spoolId, swapTrayKey);
+    }
+    const spool = spools.find(s => s.id === spoolId);
+    const name = spool?.filament?.name || 'Spool #' + spoolId;
+    toast(`Loaded ${name} into ${swapTrayKey}`, 'success');
+    closeSwapModal();
+    await loadSpools();
+    renderDashboard();
+  } catch(e) {
+    toast('Failed to swap: ' + e.message, 'error');
+  }
+}
+
 async function unloadExternalTray(spoolId) {
   try {
     await postTrayAssign(spoolId, '');
