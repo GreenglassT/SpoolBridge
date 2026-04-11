@@ -261,3 +261,33 @@ def test_bambu_color_name_unknown():
     """Unknown hex returns #RRGGBB."""
     assert bridge.bambu_color_name("ABCDEF", "") == "#ABCDEF"
     assert bridge.bambu_color_name("123456", "Basic") == "#123456"
+
+
+# ---------------------------------------------------------------------------
+# _filament_id_for_tray (sub_brand disambiguation)
+# ---------------------------------------------------------------------------
+
+def test_filament_id_for_tray_sub_brand():
+    """Picks the right filament when multiple share the same hex code."""
+    filaments = [
+        {"id": 3, "name": "PLA Basic Black", "material": "PLA", "color_hex": "000000"},
+        {"id": 18, "name": "PLA Matte Charcoal", "material": "PLA", "color_hex": "000000"},
+    ]
+    # Matte spool should match Matte Charcoal, not Basic Black
+    tray_matte = {"type": "PLA", "color": "000000", "sub_brand": "Matte"}
+    assert bridge._filament_id_for_tray(tray_matte, filaments) == 18
+
+    # Basic spool should match Basic Black, not Matte Charcoal
+    tray_basic = {"type": "PLA", "color": "000000", "sub_brand": "Basic"}
+    assert bridge._filament_id_for_tray(tray_basic, filaments) == 3
+
+
+def test_filament_id_for_tray_ambiguous():
+    """Returns None when multiple filaments match and no name disambiguates."""
+    filaments = [
+        {"id": 3, "name": "PLA Basic Black", "material": "PLA", "color_hex": "000000"},
+        {"id": 18, "name": "PLA Matte Charcoal", "material": "PLA", "color_hex": "000000"},
+    ]
+    # No sub_brand — ambiguous, should return None
+    tray_none = {"type": "PLA", "color": "000000", "sub_brand": ""}
+    assert bridge._filament_id_for_tray(tray_none, filaments) is None

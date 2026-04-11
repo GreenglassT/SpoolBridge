@@ -1085,12 +1085,17 @@ def handle_vt_tray_change(new_vt):
 
 
 def _filament_id_for_tray(tray_data, cached_filaments=None):
-    """Look up the Spoolman filament ID for the given tray's material+color."""
+    """Look up the Spoolman filament ID for the given tray's material+color+sub_brand."""
     material = tray_data.get("type", "")
     color = tray_data.get("color", "000000").lower()[:6]
+    sub_brand = tray_data.get("sub_brand", "")
     if not material:
         return None
     filaments = cached_filaments if cached_filaments is not None else sm_get("filament")
+    # Build expected display name for sub_brand matching
+    color_name = bambu_color_name(color, sub_brand)
+    display_name = f"{sub_brand} {color_name}".strip() if sub_brand else f"{material} {color_name}"
+    candidates = []
     for f in filaments:
         f_mat = (f.get("material") or "").strip()
         f_color = (f.get("color_hex") or "").lower()
@@ -1100,7 +1105,17 @@ def _filament_id_for_tray(tray_data, cached_filaments=None):
             or material.lower().startswith(f_mat.lower())
         )
         if f_color == color and mat_match:
+            candidates.append(f)
+    if not candidates:
+        return None
+    # Prefer name match when multiple filaments share the same hex
+    for f in candidates:
+        f_name = (f.get("name") or "").lower()
+        if display_name.lower() in f_name or f_name in display_name.lower():
             return f["id"]
+    # Single candidate is safe; multiple without name match is ambiguous
+    if len(candidates) == 1:
+        return candidates[0]["id"]
     return None
 
 
