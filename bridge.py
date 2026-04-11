@@ -176,6 +176,34 @@ def find_spool_by_tag(tag_uid, tray_uuid="", spools=None):
     return None
 
 
+def find_duplicate_tag_candidate(filament_id, tag_uid, spools=None):
+    """Find an unassigned Bambu spool that might be the same physical spool loaded from the other side.
+
+    Returns a spool if it has:
+    - The same filament ID
+    - An existing RFID tag (confirming it's a Bambu spool)
+    - A different tag than the one we're looking for
+    - No active tray assignment
+    """
+    if spools is None:
+        spools = sm_get("spool")
+    for s in spools:
+        f = s.get("filament", {})
+        if f.get("id") != filament_id:
+            continue
+        extra = s.get("extra", {})
+        stored_tag = extra_unquote(extra.get("tag", ""))
+        if not is_real_tag(stored_tag):
+            continue
+        if stored_tag == tag_uid:
+            continue
+        active_tray = extra_unquote(extra.get("active_tray", ""))
+        if active_tray:
+            continue
+        return s
+    return None
+
+
 def auto_create_bambu_spool(tray_data, tray_name, remain_pct=None,
                             vendors=None, filaments=None):
     """Auto-create a Bambu spool in Spoolman from AMS RFID data."""

@@ -145,3 +145,78 @@ def test_find_by_tag2_tray_uuid(mock_get):
     result = bridge.find_spool_by_tag("NOTFOUND", tray_uuid="DDDD4444")
     assert result is not None
     assert result["id"] == 11
+
+
+# ---------------------------------------------------------------------------
+# find_duplicate_tag_candidate
+# ---------------------------------------------------------------------------
+
+def test_duplicate_tag_candidate_found():
+    """Finds an unassigned Bambu spool with matching filament as a candidate."""
+    spool = {
+        "id": 17,
+        "filament": {"id": 2, "material": "PLA", "color_hex": "ffffff", "name": "PLA White",
+                      "vendor": {"id": 1, "name": "Bambu Lab"}},
+        "extra": {"tag": '"AAAA1111"', "active_tray": '""'},
+    }
+    result = bridge.find_duplicate_tag_candidate(
+        filament_id=2, tag_uid="BBBB2222", spools=[spool]
+    )
+    assert result is not None
+    assert result["id"] == 17
+
+
+def test_duplicate_tag_candidate_skip_assigned():
+    """Skips spools that are currently assigned to a tray."""
+    spool = {
+        "id": 17,
+        "filament": {"id": 2, "material": "PLA", "color_hex": "ffffff", "name": "PLA White",
+                      "vendor": {"id": 1, "name": "Bambu Lab"}},
+        "extra": {"tag": '"AAAA1111"', "active_tray": '"A4"'},
+    }
+    result = bridge.find_duplicate_tag_candidate(
+        filament_id=2, tag_uid="BBBB2222", spools=[spool]
+    )
+    assert result is None
+
+
+def test_duplicate_tag_candidate_skip_no_tag():
+    """Skips spools without a stored tag (non-Bambu / color-matched)."""
+    spool = {
+        "id": 7,
+        "filament": {"id": 2, "material": "PLA", "color_hex": "ffffff", "name": "PLA White",
+                      "vendor": {"id": 1, "name": "Bambu Lab"}},
+        "extra": {"tag": '""', "active_tray": '""'},
+    }
+    result = bridge.find_duplicate_tag_candidate(
+        filament_id=2, tag_uid="BBBB2222", spools=[spool]
+    )
+    assert result is None
+
+
+def test_duplicate_tag_candidate_skip_same_tag():
+    """Skips spools where the stored tag matches the new tag."""
+    spool = {
+        "id": 17,
+        "filament": {"id": 2, "material": "PLA", "color_hex": "ffffff", "name": "PLA White",
+                      "vendor": {"id": 1, "name": "Bambu Lab"}},
+        "extra": {"tag": '"BBBB2222"', "active_tray": '""'},
+    }
+    result = bridge.find_duplicate_tag_candidate(
+        filament_id=2, tag_uid="BBBB2222", spools=[spool]
+    )
+    assert result is None
+
+
+def test_duplicate_tag_candidate_wrong_filament():
+    """Skips spools with a different filament ID."""
+    spool = {
+        "id": 17,
+        "filament": {"id": 5, "material": "PETG", "color_hex": "000000", "name": "PETG Black",
+                      "vendor": {"id": 1, "name": "Bambu Lab"}},
+        "extra": {"tag": '"AAAA1111"', "active_tray": '""'},
+    }
+    result = bridge.find_duplicate_tag_candidate(
+        filament_id=2, tag_uid="BBBB2222", spools=[spool]
+    )
+    assert result is None
