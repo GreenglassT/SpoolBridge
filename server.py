@@ -42,6 +42,27 @@ DEFAULT_SPOOL_WEIGHT = 200.0   # empty spool weight if vendor doesn't specify
 DEFAULT_NET_WEIGHT = 1000.0    # filament net weight default
 
 # ============================================================
+# HELPERS
+# ============================================================
+
+
+def _remove_duplicate_candidate(new_tag):
+    """Remove a duplicate tag candidate from bridge_state.json."""
+    state_file = SCRIPTS_DIR / "bridge_state.json"
+    if not state_file.exists():
+        return
+    try:
+        state = json.loads(state_file.read_text())
+        candidates = state.get("duplicate_tag_candidates", [])
+        state["duplicate_tag_candidates"] = [
+            c for c in candidates if c.get("new_tag") != new_tag
+        ]
+        state_file.write_text(json.dumps(state, indent=2))
+    except Exception:
+        pass
+
+
+# ============================================================
 # FLASK APP
 # ============================================================
 
@@ -424,6 +445,45 @@ def link_spool():
     })
 
     return jsonify({"spool_id": spool_id, "linked_tag": tag_uid})
+
+
+@app.route("/api/resolve-duplicate-tag", methods=["POST"])
+def resolve_duplicate_tag():
+    """Link a second RFID tag to an existing spool (same spool, other side)."""
+    data = request.json or {}
+    spool_id = data.get("spool_id")
+    new_tag = data.get("new_tag_uid", "")
+    tray = data.get("tray", "")
+
+    if not spool_id or not new_tag:
+        return jsonify({"error": "spool_id and new_tag_uid are required"}), 400
+
+    try:
+        http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json={
+            "extra": {
+                "tag2": extra_quote(new_tag),
+                "active_tray": extra_quote(tray),
+            },
+            "location": tray_location(tray),
+        })
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+    _remove_duplicate_candidate(new_tag)
+
+    return jsonify({"spool_id": spool_id, "tag2": new_tag, "tray": tray})
+
+
+@app.route("/api/reject-duplicate-tag", methods=["POST"])
+def reject_duplicate_tag():
+    """User confirmed this is a new spool, not a duplicate. Create it via link-spool."""
+    data = request.json or {}
+    new_tag = data.get("new_tag_uid", "")
+
+    _remove_duplicate_candidate(new_tag)
+
+    # Delegate to link-spool to create the new spool
+    return link_spool()
 
 
 @app.route("/api/spools/<int:spool_id>/assign-tray", methods=["POST"])

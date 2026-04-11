@@ -649,3 +649,79 @@ def test_get_config(flask_client, spoolman_url):
     assert resp.status_code == 200
     data = resp.get_json()
     assert "spoolman_url" in data
+
+
+# ============================================================
+# RESOLVE DUPLICATE TAG
+# ============================================================
+
+def test_resolve_duplicate_tag(flask_client, spoolman_url, cleanup_spoolman):
+    """Resolving a duplicate tag saves tag2 and assigns the spool to the tray."""
+    import requests as http_req
+
+    # Ensure tag2 extra field is registered in Spoolman
+    existing = http_req.get(f"{spoolman_url}/api/v1/field/spool").json()
+    if "tag2" not in {f["name"] for f in existing}:
+        http_req.post(
+            f"{spoolman_url}/api/v1/field/spool/tag2",
+            json={"name": "tag2", "field_type": "text"},
+        )
+
+    create_resp = flask_client.post(
+        "/api/spools",
+        json={"brand": "bambu", "material": "PLA", "color_hex": "ffffff"},
+        content_type="application/json",
+    )
+    spool_id = create_resp.get_json()["id"]
+    cleanup_spoolman["spools"].append(spool_id)
+    fil_id = create_resp.get_json().get("filament", {}).get("id")
+    if fil_id:
+        cleanup_spoolman["filaments"].append(fil_id)
+
+    http_req.patch(f"{spoolman_url}/api/v1/spool/{spool_id}", json={
+        "extra": {"tag": '"ORIGTAGAA"', "active_tray": '""'},
+    })
+
+    resp = flask_client.post(
+        "/api/resolve-duplicate-tag",
+        json={"spool_id": spool_id, "new_tag_uid": "NEWTAGBB", "tray": "A2"},
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["spool_id"] == spool_id
+    assert data["tag2"] == "NEWTAGBB"
+
+    spool = http_req.get(f"{spoolman_url}/api/v1/spool/{spool_id}").json()
+    assert spool["extra"]["tag2"].strip('"') == "NEWTAGBB"
+    assert spool["extra"]["active_tray"].strip('"') == "A2"
+
+
+def test_resolve_duplicate_tag_missing_fields(flask_client, spoolman_url):
+    resp = flask_client.post(
+        "/api/resolve-duplicate-tag",
+        json={"spool_id": 999},
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+
+
+def test_reject_duplicate_tag(flask_client, spoolman_url, tmp_path):
+    """Rejecting a duplicate tag removes the candidate from bridge state."""
+    import json as json_mod
+    state = {
+        "connected": True,
+        "duplicate_tag_candidates": [{
+            "tray": "A2", "spool_id": 99, "spool_name": "PLA White",
+            "new_tag": "NEWTAGCC", "type": "PLA", "color": "ffffff", "tray_num": 2,
+        }],
+        "unknown_spools": [],
+    }
+    (tmp_path / "bridge_state.json").write_text(json_mod.dumps(state))
+
+    resp = flask_client.post(
+        "/api/reject-duplicate-tag",
+        json={"slot_key": "ams_1", "new_tag_uid": "NEWTAGCC", "tag_uid": "NEWTAGCC", "type": "PLA", "color_hex": "ffffff", "tray": "A2"},
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
