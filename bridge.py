@@ -541,13 +541,26 @@ def auto_create_bambu_spool(tray_data, tray_name, remain_pct=None,
         if filaments is None:
             filaments = sm_get("filament")
         filament_id = None
+        # Match by material + color + vendor, preferring name match when
+        # multiple filaments share the same hex (e.g. PLA Basic Black vs
+        # PLA Matte Charcoal are both PLA #000000 by Bambu Lab).
+        candidates = []
         for f in filaments:
             f_mat = (f.get("material") or "").lower()
             f_color = (f.get("color_hex") or "").lower()
             f_vendor = (f.get("vendor") or {}).get("id")
             if f_mat == material.lower() and f_color == color_hex.lower() and f_vendor == vendor_id:
-                filament_id = f["id"]
-                break
+                candidates.append(f)
+        if candidates:
+            # Prefer exact name match (e.g. "Matte Charcoal" in "PLA Matte Charcoal")
+            for f in candidates:
+                f_name = (f.get("name") or "").lower()
+                if display_name.lower() in f_name or f_name in display_name.lower():
+                    filament_id = f["id"]
+                    break
+            if not filament_id:
+                # No name match — don't reuse a wrong filament, create a new one
+                filament_id = None
 
         if not filament_id:
             fil_data = {
