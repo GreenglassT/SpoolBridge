@@ -306,6 +306,34 @@ _BAMBU_COLORS_BY_LINE = {
     ("d32941", "abs"): "Red",
     ("af1685", "abs"): "Purple",
     ("87909a", "abs"): "Silver",
+    # PLA Silk
+    ("147bd1", "silk"): "Blue",
+    ("854ce4", "silk"): "Purple",
+    ("eaeceb", "silk"): "Silver",
+    # PLA Silk+
+    ("a8c6ee", "silk"): "Baby Blue",
+    ("008bda", "silk"): "Blue",
+    ("018814", "silk"): "Candy Green",
+    ("d02727", "silk"): "Candy Red",
+    ("f3cfb2", "silk"): "Champagne",
+    ("f4a925", "silk"): "Gold",
+    ("96dcb9", "silk"): "Mint",
+    ("f7ada6", "silk"): "Pink",
+    ("8671cb", "silk"): "Purple",
+    ("ba9594", "silk"): "Rose Gold",
+    ("c8c8c8", "silk"): "Silver",
+    ("5f6367", "silk"): "Titan Gray",
+    # ASA
+    ("2140b4", "asa"): "Blue",
+    ("8a949e", "asa"): "Gray",
+    ("00a6a0", "asa"): "Green",
+    ("e02928", "asa"): "Red",
+    # PLA Galaxy
+    ("684a43", "galaxy"): "Brown",
+    ("3b665e", "galaxy"): "Green",
+    ("594177", "galaxy"): "Purple",
+    # PLA Marble
+    ("ad4e38", "marble"): "Red Granite",
     # TPU 90A
     ("ffffee", "tpu"): "White",
     ("d6abff", "tpu"): "Grape Jelly",
@@ -406,7 +434,33 @@ _BAMBU_COLORS_GENERIC = {
     "5c4738": "Cocoa Brown",
     "9ea2a2": "Quicksilver",
     "f1aaa8": "Blaze",
-    "d32941": "Red",
+    # PLA Silk / Silk+
+    "147bd1": "Blue",
+    "854ce4": "Purple",
+    "eaeceb": "Silver",
+    "a8c6ee": "Baby Blue",
+    "008bda": "Blue",
+    "018814": "Candy Green",
+    "d02727": "Candy Red",
+    "f3cfb2": "Champagne",
+    "f4a925": "Gold",
+    "96dcb9": "Mint",
+    "f7ada6": "Pink",
+    "8671cb": "Purple",
+    "ba9594": "Rose Gold",
+    "c8c8c8": "Silver",
+    "5f6367": "Titan Gray",
+    # ASA
+    "2140b4": "Blue",
+    "8a949e": "Gray",
+    "00a6a0": "Green",
+    "e02928": "Red",
+    # PLA Galaxy
+    "684a43": "Brown",
+    "3b665e": "Green",
+    "594177": "Purple",
+    # PLA Marble
+    "ad4e38": "Red Granite",
 }
 
 
