@@ -220,3 +220,28 @@ def test_duplicate_tag_candidate_wrong_filament():
         filament_id=2, tag_uid="BBBB2222", spools=[spool]
     )
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# bambu_color_name
+# ---------------------------------------------------------------------------
+
+def test_bambu_color_name_sub_brand():
+    """Sub-brand-specific lookup disambiguates shared hex codes."""
+    assert bridge.bambu_color_name("000000", "Matte") == "Charcoal"
+    assert bridge.bambu_color_name("000000", "Basic") == "Black"
+    assert bridge.bambu_color_name("FFFFFF", "Basic") == "Jade White"
+    assert bridge.bambu_color_name("FFFFFF", "Matte") == "Ivory White"
+
+
+def test_bambu_color_name_generic_fallback():
+    """Falls back to generic table when no sub_brand provided."""
+    assert bridge.bambu_color_name("DE4343", "") == "Scarlet Red"
+    assert bridge.bambu_color_name("424379", "") == "Galaxy"
+    assert bridge.bambu_color_name("00AE42", "") == "Bambu Green"
+
+
+def test_bambu_color_name_unknown():
+    """Unknown hex returns #RRGGBB."""
+    assert bridge.bambu_color_name("ABCDEF", "") == "#ABCDEF"
+    assert bridge.bambu_color_name("123456", "Basic") == "#123456"

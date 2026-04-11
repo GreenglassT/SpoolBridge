@@ -205,6 +205,228 @@ def find_duplicate_tag_candidate(filament_id, tag_uid, spools=None):
     return None
 
 
+# Bambu Lab color hex → name mapping, keyed by (hex, sub_brand_keyword).
+# Sub-brand keywords disambiguate shared hex codes (e.g. 000000 is "Black"
+# for Basic but "Charcoal" for Matte).  Lookup order: exact (hex, sub_brand)
+# match first, then hex-only fallback.
+_BAMBU_COLORS_BY_LINE = {
+    # PLA Basic
+    ("ffffff", "basic"): "Jade White",
+    ("000000", "basic"): "Black",
+    ("c12e1f", "basic"): "Red",
+    ("0a2989", "basic"): "Blue",
+    ("8e9089", "basic"): "Gray",
+    ("00ae42", "basic"): "Bambu Green",
+    ("3f8e43", "basic"): "Mistletoe Green",
+    ("0086d6", "basic"): "Cyan",
+    ("fec600", "basic"): "Sunflower Yellow",
+    ("482960", "basic"): "Indigo Purple",
+    ("6f5034", "basic"): "Cocoa Brown",
+    ("f5547c", "basic"): "Hot Pink",
+    ("ff9016", "basic"): "Pumpkin Orange",
+    ("ec008c", "basic"): "Magenta",
+    ("e4bd68", "basic"): "Gold",
+    ("5e43b7", "basic"): "Purple",
+    ("f7e6de", "basic"): "Beige",
+    ("f55a74", "basic"): "Pink",
+    ("847d48", "basic"): "Bronze",
+    ("00b1b7", "basic"): "Turquoise",
+    # PLA Matte
+    ("ffffff", "matte"): "Ivory White",
+    ("000000", "matte"): "Charcoal",
+    ("cbc6b8", "matte"): "Bone White",
+    ("e8dbb7", "matte"): "Desert Tan",
+    ("d3b7a7", "matte"): "Latte Brown",
+    ("ae835b", "matte"): "Caramel",
+    ("b15533", "matte"): "Terracotta",
+    ("7d6556", "matte"): "Dark Brown",
+    ("4d3324", "matte"): "Dark Chocolate",
+    ("ae96d4", "matte"): "Lilac Purple",
+    ("e8afcf", "matte"): "Sakura Pink",
+    ("f99963", "matte"): "Mandarin Orange",
+    ("f7d959", "matte"): "Lemon Yellow",
+    ("950051", "matte"): "Plum",
+    ("de4343", "matte"): "Scarlet Red",
+    ("bb3d43", "matte"): "Dark Red",
+    ("68724d", "matte"): "Dark Green",
+    ("61c680", "matte"): "Grass Green",
+    ("c2e189", "matte"): "Apple Green",
+    ("9b9ea0", "matte"): "Ash Gray",
+    ("0078bf", "matte"): "Marine Blue",
+    ("a3d8e1", "matte"): "Ice Blue",
+    # PLA-CF
+    ("951e23", "cf"): "Burgundy Red",
+    ("69398e", "cf"): "Iris Purple",
+    ("5c9748", "cf"): "Matcha Green",
+    ("6e88bc", "cf"): "Jeans Blue",
+    ("2842ad", "cf"): "Royal Blue",
+    ("4d5054", "cf"): "Lava Gray",
+    # PETG-CF
+    ("9f332a", "cf"): "Brick Red",
+    ("583061", "cf"): "Violet Purple",
+    ("324585", "cf"): "Indigo Blue",
+    ("16b08e", "cf"): "Malachite Green",
+    ("565656", "cf"): "Titan Gray",
+    # PLA Galaxy
+    ("424379", "galaxy"): "Galaxy",
+    # PLA Marble
+    ("f7f3f0", "marble"): "Marble",
+    # PLA Tough+
+    ("afb1ae", "tough"): "Gray",
+    ("959698", "tough"): "Silver",
+    ("f4d53f", "tough"): "Yellow",
+    ("009bd8", "tough"): "Cyan",
+    ("dc3a27", "tough"): "Orange",
+    # PLA Translucent
+    ("009fa1", "translucent"): "Teal",
+    ("96d8af", "translucent"): "Light Jade",
+    ("0047bb", "translucent"): "Blue",
+    ("f5dbab", "translucent"): "Mellow Yellow",
+    ("8344b0", "translucent"): "Purple",
+    ("f5b6cd", "translucent"): "Cherry Pink",
+    ("f74e02", "translucent"): "Orange",
+    ("b8cde9", "translucent"): "Ice Blue",
+    ("b50011", "translucent"): "Red",
+    ("b8acd6", "translucent"): "Lavender",
+    # PLA Wood
+    ("4f3f24", "wood"): "Black Walnut",
+    ("4c241c", "wood"): "Rosewood",
+    ("995f11", "wood"): "Clay Brown",
+    ("918669", "wood"): "Classic Birch",
+    ("d6cca3", "wood"): "White Oak",
+    ("c98935", "wood"): "Ochre Yellow",
+    # ABS
+    ("e8dbb7", "abs"): "Desert Tan",
+    ("789d4a", "abs"): "Olive",
+    ("489fdf", "abs"): "Azure",
+    ("0c2340", "abs"): "Navy Blue",
+    ("0a2ca5", "abs"): "Blue",
+    ("ffc72c", "abs"): "Tangerine Yellow",
+    ("ff6a13", "abs"): "Orange",
+    ("d32941", "abs"): "Red",
+    ("af1685", "abs"): "Purple",
+    ("87909a", "abs"): "Silver",
+    # TPU 90A
+    ("ffffee", "tpu"): "White",
+    ("d6abff", "tpu"): "Grape Jelly",
+    ("7eb4e1", "tpu"): "Crystal Blue",
+    ("5c4738", "tpu"): "Cocoa Brown",
+    ("9ea2a2", "tpu"): "Quicksilver",
+    ("f1aaa8", "tpu"): "Blaze",
+}
+
+# Hex-only fallback (no sub_brand disambiguation needed)
+_BAMBU_COLORS_GENERIC = {
+    "000000": "Black",
+    "ffffff": "White",
+    "c12e1f": "Red",
+    "0a2989": "Blue",
+    "8e9089": "Gray",
+    "00ae42": "Bambu Green",
+    "3f8e43": "Mistletoe Green",
+    "0086d6": "Cyan",
+    "fec600": "Sunflower Yellow",
+    "482960": "Indigo Purple",
+    "6f5034": "Cocoa Brown",
+    "f5547c": "Hot Pink",
+    "ff9016": "Pumpkin Orange",
+    "ec008c": "Magenta",
+    "e4bd68": "Gold",
+    "5e43b7": "Purple",
+    "f7e6de": "Beige",
+    "f55a74": "Pink",
+    "847d48": "Bronze",
+    "00b1b7": "Turquoise",
+    "cbc6b8": "Bone White",
+    "e8dbb7": "Desert Tan",
+    "d3b7a7": "Latte Brown",
+    "ae835b": "Caramel",
+    "b15533": "Terracotta",
+    "7d6556": "Dark Brown",
+    "4d3324": "Dark Chocolate",
+    "ae96d4": "Lilac Purple",
+    "e8afcf": "Sakura Pink",
+    "f99963": "Mandarin Orange",
+    "f7d959": "Lemon Yellow",
+    "950051": "Plum",
+    "de4343": "Scarlet Red",
+    "bb3d43": "Dark Red",
+    "68724d": "Dark Green",
+    "61c680": "Grass Green",
+    "c2e189": "Apple Green",
+    "9b9ea0": "Ash Gray",
+    "0078bf": "Marine Blue",
+    "a3d8e1": "Ice Blue",
+    "951e23": "Burgundy Red",
+    "69398e": "Iris Purple",
+    "5c9748": "Matcha Green",
+    "6e88bc": "Jeans Blue",
+    "2842ad": "Royal Blue",
+    "4d5054": "Lava Gray",
+    "9f332a": "Brick Red",
+    "583061": "Violet Purple",
+    "324585": "Indigo Blue",
+    "16b08e": "Malachite Green",
+    "565656": "Titan Gray",
+    "424379": "Galaxy",
+    "f7f3f0": "Marble",
+    "afb1ae": "Gray",
+    "959698": "Silver",
+    "f4d53f": "Yellow",
+    "009bd8": "Cyan",
+    "dc3a27": "Orange",
+    "009fa1": "Teal",
+    "96d8af": "Light Jade",
+    "0047bb": "Blue",
+    "f5dbab": "Mellow Yellow",
+    "8344b0": "Purple",
+    "f5b6cd": "Cherry Pink",
+    "f74e02": "Orange",
+    "b8cde9": "Ice Blue",
+    "b50011": "Red",
+    "b8acd6": "Lavender",
+    "4f3f24": "Black Walnut",
+    "4c241c": "Rosewood",
+    "995f11": "Clay Brown",
+    "918669": "Classic Birch",
+    "d6cca3": "White Oak",
+    "c98935": "Ochre Yellow",
+    "789d4a": "Olive",
+    "489fdf": "Azure",
+    "0c2340": "Navy Blue",
+    "0a2ca5": "Blue",
+    "ffc72c": "Tangerine Yellow",
+    "ff6a13": "Orange",
+    "d32941": "Red",
+    "af1685": "Purple",
+    "87909a": "Silver",
+    "ffffee": "White",
+    "d6abff": "Grape Jelly",
+    "7eb4e1": "Crystal Blue",
+    "5c4738": "Cocoa Brown",
+    "9ea2a2": "Quicksilver",
+    "f1aaa8": "Blaze",
+    "d32941": "Red",
+}
+
+
+def bambu_color_name(color_hex, sub_brand=""):
+    """Resolve a Bambu hex color to its marketing name.
+
+    Tries (hex, sub_brand_keyword) first for lines that share hex codes,
+    then falls back to the generic hex-only table, then '#RRGGBB'.
+    """
+    h = color_hex.lower()[:6]
+    sb = sub_brand.lower()
+    # Try sub-brand-specific lookup
+    for keyword in _BAMBU_COLORS_BY_LINE:
+        if keyword[0] == h and keyword[1] in sb:
+            return _BAMBU_COLORS_BY_LINE[keyword]
+    # Also try material-as-keyword for ABS/TPU which don't have sub_brand
+    # (handled via generic fallback)
+    return _BAMBU_COLORS_GENERIC.get(h, f"#{color_hex}")
+
+
 def auto_create_bambu_spool(tray_data, tray_name, remain_pct=None,
                             vendors=None, filaments=None):
     """Auto-create a Bambu spool in Spoolman from AMS RFID data."""
@@ -217,15 +439,7 @@ def auto_create_bambu_spool(tray_data, tray_name, remain_pct=None,
     nozzle_max = tray_data.get("nozzle_max", 230)
     net_weight = tray_data.get("net_weight", 1000) or 1000
 
-    color_name = ""
-    hex_lower = color_hex.lower()
-    if hex_lower in ("000000",):
-        color_name = "Black"
-    elif hex_lower in ("ffffff",):
-        color_name = "White"
-    else:
-        color_name = f"#{color_hex}"
-
+    color_name = bambu_color_name(color_hex, sub_brand)
     display_name = f"{sub_brand} {color_name}".strip() if sub_brand else f"{material} {color_name}"
 
     try:
