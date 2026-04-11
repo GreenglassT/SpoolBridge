@@ -237,7 +237,7 @@ def test_bambu_color_name_sub_brand():
 def test_bambu_color_name_generic_fallback():
     """Falls back to generic table when no sub_brand provided."""
     assert bridge.bambu_color_name("DE4343", "") == "Scarlet Red"
-    assert bridge.bambu_color_name("424379", "") == "Galaxy"
+    assert bridge.bambu_color_name("424379", "") == "Nebulae"
     assert bridge.bambu_color_name("00AE42", "") == "Bambu Green"
 
 

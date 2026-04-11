@@ -268,9 +268,9 @@ _BAMBU_COLORS_BY_LINE = {
     ("16b08e", "cf"): "Malachite Green",
     ("565656", "cf"): "Titan Gray",
     # PLA Galaxy
-    ("424379", "galaxy"): "Galaxy",
+    ("424379", "galaxy"): "Nebulae",
     # PLA Marble
-    ("f7f3f0", "marble"): "Marble",
+    ("f7f3f0", "marble"): "White",
     # PLA Tough+
     ("afb1ae", "tough"): "Gray",
     ("959698", "tough"): "Silver",
@@ -368,8 +368,8 @@ _BAMBU_COLORS_GENERIC = {
     "324585": "Indigo Blue",
     "16b08e": "Malachite Green",
     "565656": "Titan Gray",
-    "424379": "Galaxy",
-    "f7f3f0": "Marble",
+    "424379": "Nebulae",
+    "f7f3f0": "Marble White",
     "afb1ae": "Gray",
     "959698": "Silver",
     "f4d53f": "Yellow",
