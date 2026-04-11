@@ -169,8 +169,10 @@ def find_spool_by_tag(tag_uid, tray_uuid="", spools=None):
     for s in spools:
         extra = s.get("extra", {})
         tag = extra_unquote(extra.get("tag", ""))
-        if tag and (tag == tag_uid or tag == tray_uuid):
-            return s
+        tag2 = extra_unquote(extra.get("tag2", ""))
+        for stored in (tag, tag2):
+            if stored and (stored == tag_uid or stored == tray_uuid):
+                return s
     return None
 
 

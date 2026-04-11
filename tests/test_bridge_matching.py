@@ -117,3 +117,31 @@ def test_find_by_tag_empty(mock_get):
     assert bridge.find_spool_by_tag("") is None
     assert bridge.find_spool_by_tag(None) is None
     mock_get.assert_not_called()
+
+
+@patch("bridge.requests.get")
+def test_find_by_tag2(mock_get):
+    """Finds a spool by its second RFID tag stored in extra.tag2."""
+    spool = {
+        "id": 10,
+        "filament": {"material": "PLA", "color_hex": "ffffff", "name": "PLA White"},
+        "extra": {"tag": '"AAAA1111"', "tag2": '"BBBB2222"'},
+    }
+    mock_get.return_value = _make_mock_response([spool])
+    result = bridge.find_spool_by_tag("BBBB2222")
+    assert result is not None
+    assert result["id"] == 10
+
+
+@patch("bridge.requests.get")
+def test_find_by_tag2_tray_uuid(mock_get):
+    """Finds a spool when tray_uuid matches tag2."""
+    spool = {
+        "id": 11,
+        "filament": {"material": "PLA", "color_hex": "000000", "name": "PLA Black"},
+        "extra": {"tag": '"CCCC3333"', "tag2": '"DDDD4444"'},
+    }
+    mock_get.return_value = _make_mock_response([spool])
+    result = bridge.find_spool_by_tag("NOTFOUND", tray_uuid="DDDD4444")
+    assert result is not None
+    assert result["id"] == 11
