@@ -99,7 +99,7 @@ def sm_get(endpoint):
 
 def ensure_extra_fields():
     """Register required extra fields in Spoolman if not already present."""
-    required = ["tag", "active_tray"]
+    required = ["tag", "tag2", "active_tray"]
     try:
         existing = requests.get(f"{SPOOLMAN_URL}/api/v1/field/spool").json()
         existing_names = {f["name"] for f in existing}
