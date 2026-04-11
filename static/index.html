@@ -880,6 +880,7 @@ input::placeholder { color: var(--text-dim); }
     <div id="tray-strip" style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr 1fr; gap:8px; margin-bottom:20px;"></div>
 
     <div id="unknown-spools-alert" style="margin-bottom:16px;"></div>
+        <div id="duplicate-tag-alert" style="margin-bottom:16px;"></div>
 
     <!-- Activity | Low Stock + Usage -->
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
@@ -1425,6 +1426,29 @@ async function fetchPrinterStatus() {
       alertEl.innerHTML = '';
     }
 
+    const dupEl = document.getElementById('duplicate-tag-alert');
+    if (dupEl && status.duplicate_tag_candidates && status.duplicate_tag_candidates.length > 0) {
+      dupEl.innerHTML = status.duplicate_tag_candidates.map(d => `
+        <div class="card" style="border-color:var(--yellow); margin-bottom:8px; padding:12px;">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+            <span class="accent" style="font-weight:600;">${escHtml(d.tray)}</span>
+            <span class="muted">Possible duplicate detected</span>
+          </div>
+          <div style="font-size:0.85rem; margin-bottom:10px;">
+            This <strong>${escHtml(d.type)} #${escHtml(d.color)}</strong> might be
+            <strong>${escHtml(d.spool_name)}</strong> (spool #${d.spool_id}) loaded from the other side.
+            Bambu spools have two RFID tags.
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-primary btn-sm" onclick="resolveDuplicateTag(${d.spool_id}, '${escHtml(d.new_tag)}', '${escHtml(d.tray)}')">Same Spool</button>
+            <button class="btn btn-sm" style="border:1px solid var(--border);" onclick="rejectDuplicateTag('${escHtml(d.new_tag)}', '${escHtml(d.type)}', '${escHtml(d.color)}', '${escHtml(d.tray)}')">New Spool</button>
+          </div>
+        </div>
+      `).join('');
+    } else if (dupEl) {
+      dupEl.innerHTML = '';
+    }
+
     const bridgeEl = document.getElementById('bridge-indicator');
     if (status.connected) {
       bridgeEl.innerHTML = '<span class="status-dot on"></span><span class="green">connected</span>';
@@ -1534,6 +1558,36 @@ async function linkUnknownSpool(tagUid, type, color, tray) {
     renderDashboard();
   } catch(e) {
     toast('Failed to link spool: ' + e.message, 'error');
+  }
+}
+
+async function resolveDuplicateTag(spoolId, newTag, tray) {
+  try {
+    await api('/api/resolve-duplicate-tag', {
+      method: 'POST',
+      body: { spool_id: spoolId, new_tag_uid: newTag, tray: tray },
+    });
+    toast('Linked second RFID tag to spool #' + spoolId, 'success');
+    await loadSpools();
+    renderDashboard();
+  } catch(e) {
+    toast('Failed to link tag: ' + e.message, 'error');
+  }
+}
+
+async function rejectDuplicateTag(newTag, type, color, tray) {
+  const name = prompt('Name for this new spool (' + type + ' #' + color + '):', type + ' ' + color);
+  if (!name) return;
+  try {
+    const result = await api('/api/reject-duplicate-tag', {
+      method: 'POST',
+      body: { new_tag_uid: newTag, tag_uid: newTag, type: type, color_hex: color, name: name, tray: tray },
+    });
+    toast('New spool created', 'success');
+    await loadSpools();
+    renderDashboard();
+  } catch(e) {
+    toast('Failed to create spool: ' + e.message, 'error');
   }
 }
 
