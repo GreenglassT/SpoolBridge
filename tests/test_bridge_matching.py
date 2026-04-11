@@ -158,6 +158,7 @@ def test_duplicate_tag_candidate_found():
         "filament": {"id": 2, "material": "PLA", "color_hex": "ffffff", "name": "PLA White",
                       "vendor": {"id": 1, "name": "Bambu Lab"}},
         "extra": {"tag": '"AAAA1111"', "active_tray": '""'},
+        "remaining_weight": 500.0,
     }
     result = bridge.find_duplicate_tag_candidate(
         filament_id=2, tag_uid="BBBB2222", spools=[spool]
@@ -218,6 +219,21 @@ def test_duplicate_tag_candidate_wrong_filament():
     }
     result = bridge.find_duplicate_tag_candidate(
         filament_id=2, tag_uid="BBBB2222", spools=[spool]
+    )
+    assert result is None
+
+
+def test_duplicate_tag_candidate_skip_empty():
+    """Skips empty spools — likely a used-up spool being replaced by a refill."""
+    spool = {
+        "id": 4,
+        "filament": {"id": 3, "material": "PLA", "color_hex": "000000", "name": "PLA Basic Black",
+                      "vendor": {"id": 1, "name": "Bambu Lab"}},
+        "extra": {"tag": '"AAAA1111"', "active_tray": '""'},
+        "remaining_weight": 0.0,
+    }
+    result = bridge.find_duplicate_tag_candidate(
+        filament_id=3, tag_uid="BBBB2222", spools=[spool]
     )
     assert result is None
 

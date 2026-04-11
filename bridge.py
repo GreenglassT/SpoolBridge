@@ -201,6 +201,9 @@ def find_duplicate_tag_candidate(filament_id, tag_uid, spools=None):
         active_tray = extra_unquote(extra.get("active_tray", ""))
         if active_tray:
             continue
+        # Skip empty spools — likely a used-up spool being replaced by a refill
+        if s.get("remaining_weight", 0) <= 0:
+            continue
         return s
     return None
 
