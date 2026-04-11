@@ -134,6 +134,7 @@ def reset_bridge_globals():
         bridge.active_spool_id = None
         bridge.last_gcode_state = ""
         bridge.unknown_spools = {}
+        bridge.duplicate_tag_candidates = {}
         bridge.ams_environment = {}
         bridge._jsonl_counts.clear()
         bridge._ams_initialized = True  # skip init path in tests

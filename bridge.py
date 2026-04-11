@@ -75,6 +75,7 @@ last_gcode_state = ""      # track state transitions to fire finish only once
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent))
 bridge_state_path = DATA_DIR / "bridge_state.json"
 unknown_spools = {}        # {tray_key: {type, color, tag_uid, tray_num, tray}}
+duplicate_tag_candidates = {}  # {slot_key: {tray, spool_id, spool_name, new_tag, type, color, tray_num}}
 ams_environment = {}       # {humidity, temp}
 ams_tray_remain = {}       # {slot_key: remain%} — updated separately from change detection
 _last_synced_remain = {}   # {slot_key: remain%} — last value written to Spoolman
@@ -520,6 +521,7 @@ def write_bridge_state():
         "ams_environment": ams_environment,
         "ams_tray_remain": ams_tray_remain,
         "unknown_spools": list(unknown_spools.values()),
+        "duplicate_tag_candidates": list(duplicate_tag_candidates.values()),
         "current_vt_tray": current_vt_tray,
         "printer": printer_telemetry,
         "print_start_time": print_start_time,
@@ -772,6 +774,26 @@ def handle_vt_tray_change(new_vt):
         log_event("external_tap", tray=TRAY_EXTERNAL, detail=f"Unmatched: {new_vt['type']} #{new_vt['color']}")
 
 
+def _filament_id_for_tray(tray_data, cached_filaments=None):
+    """Look up the Spoolman filament ID for the given tray's material+color."""
+    material = tray_data.get("type", "")
+    color = tray_data.get("color", "000000").lower()[:6]
+    if not material:
+        return None
+    filaments = cached_filaments if cached_filaments is not None else sm_get("filament")
+    for f in filaments:
+        f_mat = (f.get("material") or "").strip()
+        f_color = (f.get("color_hex") or "").lower()
+        mat_match = (
+            f_mat.lower() == material.lower()
+            or f_mat.lower().startswith(material.lower())
+            or material.lower().startswith(f_mat.lower())
+        )
+        if f_color == color and mat_match:
+            return f["id"]
+    return None
+
+
 def handle_ams_change(new_trays):
     """Handle AMS tray changes (Bambu RFID detection)."""
     global current_ams_trays, _ams_initialized, _bridge_state_dirty
@@ -801,13 +823,30 @@ def handle_ams_change(new_trays):
             if is_real_tag(tag_uid) or is_real_tag(tray_uuid):
                 spool = find_spool_by_tag(tag_uid, tray_uuid, spools=all_spools)
                 if not spool:
-                    remain = ams_tray_remain.get(tray_name)
-                    spool = auto_create_bambu_spool(
-                        tray_data, tray_name, remain_pct=remain,
-                        vendors=cached_vendors, filaments=cached_filaments,
-                    )
-                    if spool:
-                        all_spools.append(spool)
+                    tag_value = tag_uid or tray_uuid
+                    fil_id = _filament_id_for_tray(tray_data, cached_filaments)
+                    dup = find_duplicate_tag_candidate(fil_id, tag_value, spools=all_spools) if fil_id else None
+                    if dup:
+                        dup_name = (dup.get("filament") or {}).get("name", "?")
+                        duplicate_tag_candidates[slot_key] = {
+                            "tray": tray_name,
+                            "spool_id": dup["id"],
+                            "spool_name": dup_name,
+                            "new_tag": tag_value,
+                            "type": tray_data.get("type", ""),
+                            "color": tray_data.get("color", ""),
+                            "tray_num": tray_num,
+                        }
+                        log.info(f"AMS Tray {tray_num}: duplicate tag candidate — spool #{dup['id']} ({dup_name})")
+                        log_event("duplicate_tag", tray=tray_name, spool_id=dup["id"], spool_name=dup_name, detail=f"new tag {tag_value[:8]}...")
+                    else:
+                        remain = ams_tray_remain.get(tray_name)
+                        spool = auto_create_bambu_spool(
+                            tray_data, tray_name, remain_pct=remain,
+                            vendors=cached_vendors, filaments=cached_filaments,
+                        )
+                        if spool:
+                            all_spools.append(spool)
                 else:
                     update_spool_tray(spool["id"], tray_name, all_spools=all_spools)
         return
@@ -831,6 +870,7 @@ def handle_ams_change(new_trays):
             clear_tray_assignment(tray_name, all_spools=all_spools)
             log_event("tray_unload", tray=tray_name, detail="slot empty")
             unknown_spools.pop(slot_key, None)
+            duplicate_tag_candidates.pop(slot_key, None)
             current_ams_trays[slot_key] = tray_data
             _bridge_state_dirty = True
             continue
@@ -840,10 +880,29 @@ def handle_ams_change(new_trays):
 
         if is_real_tag(tag_uid) or is_real_tag(tray_uuid):
             spool = find_spool_by_tag(tag_uid, tray_uuid, spools=all_spools)
+            dup = None
             if not spool:
-                # Auto-create Bambu spool from RFID data
-                remain = ams_tray_remain.get(tray_name)
-                spool = auto_create_bambu_spool(tray_data, tray_name, remain_pct=remain)
+                tag_value = tag_uid or tray_uuid
+                fil_id = _filament_id_for_tray(tray_data)
+                dup = find_duplicate_tag_candidate(fil_id, tag_value, spools=all_spools) if fil_id else None
+                if dup:
+                    dup_name = (dup.get("filament") or {}).get("name", "?")
+                    duplicate_tag_candidates[slot_key] = {
+                        "tray": tray_name,
+                        "spool_id": dup["id"],
+                        "spool_name": dup_name,
+                        "new_tag": tag_value,
+                        "type": tray_data.get("type", ""),
+                        "color": tray_data.get("color", ""),
+                        "tray_num": tray_num,
+                    }
+                    log.info(f"AMS Tray {tray_num}: duplicate tag candidate — spool #{dup['id']} ({dup_name})")
+                    log_event("duplicate_tag", tray=tray_name, spool_id=dup["id"], spool_name=dup_name, detail=f"new tag {tag_value[:8]}...")
+                    unknown_spools.pop(slot_key, None)
+                else:
+                    # Auto-create Bambu spool from RFID data
+                    remain = ams_tray_remain.get(tray_name)
+                    spool = auto_create_bambu_spool(tray_data, tray_name, remain_pct=remain)
             if spool:
                 f = spool.get("filament", {})
                 log.info(
@@ -853,7 +912,8 @@ def handle_ams_change(new_trays):
                 update_spool_tray(spool["id"], tray_name, all_spools=all_spools)
                 log_event("tray_load", tray=tray_name, spool_id=spool["id"], spool_name=f.get("name", "?"), detail=f"tag {tag_uid[:8]}...")
                 unknown_spools.pop(slot_key, None)
-            else:
+                duplicate_tag_candidates.pop(slot_key, None)
+            elif not dup:
                 log.info(
                     f"AMS Tray {tray_num}: Failed to create spool for tag {tag_uid[:8]}... "
                     f"({tray_data['type']} #{tray_data['color']})"
