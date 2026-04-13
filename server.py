@@ -576,10 +576,10 @@ def openspool_write_tag(spool_id):
             ("number/Filament Max Temp/set", {"value": tag["max_temp"]}),
             ("text/Spool URL/set", {"value": f"{public}/spool/{spool_id}"}),
         ]:
-            resp = session.post(f"{OPENSPOOL_URL}/{endpoint}", params=params, timeout=2)
+            resp = session.post(f"{OPENSPOOL_URL}/{endpoint}", params=params, timeout=8)
             resp.raise_for_status()
         # Trigger write after all fields are set
-        session.post(f"{OPENSPOOL_URL}/button/Write NFC/press", timeout=2).raise_for_status()
+        session.post(f"{OPENSPOOL_URL}/button/Write NFC/press", timeout=8).raise_for_status()
     except http_requests.exceptions.RequestException as e:
         return jsonify({"error": f"Failed to reach OpenSpool device: {e}"}), 502
 

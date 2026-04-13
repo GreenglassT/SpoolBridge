@@ -89,8 +89,28 @@ FILAMENT_CODES = {
 
 
 def get_openspool_type(material):
-    """Convert Spoolman material name to OpenSpool/Bambu type string."""
-    return MATERIAL_MAP.get(material.lower().strip(), material.upper())
+    """Convert Spoolman material name to OpenSpool/Bambu type string.
+
+    The OpenSpool ESP32 only accepts a fixed list of Filament Type options
+    (PLA, PETG, ABS, ASA, TPU, PC, PA, PVA plus their -CF variants), so any
+    brand-specific suffix ("PLA+ HS", "PETG HF", "TPU 90A") must collapse to
+    a base material the device will actually accept.
+    """
+    key = (material or "").lower().strip()
+    if key in MATERIAL_MAP:
+        return MATERIAL_MAP[key]
+    # Prefix match: pick the longest MATERIAL_MAP key that the material starts with.
+    best = ""
+    for k in MATERIAL_MAP:
+        if key.startswith(k) and len(k) > len(best):
+            best = k
+    if best:
+        return MATERIAL_MAP[best]
+    # Last-resort prefix check on base material words.
+    for base in ("pla-cf", "petg-cf", "pa-cf", "pla", "petg", "abs", "asa", "tpu", "pc", "pa", "pva"):
+        if key.startswith(base):
+            return MATERIAL_MAP[base]
+    return material.upper()
 
 
 def get_filament_code(tray_type):
