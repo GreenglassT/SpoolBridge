@@ -152,7 +152,7 @@ def test_find_by_tag2_tray_uuid(mock_get):
 # ---------------------------------------------------------------------------
 
 def test_duplicate_tag_candidate_found():
-    """Finds an unassigned Bambu spool with matching filament as a candidate."""
+    """Finds an unassigned Bambu spool with matching material+color as a candidate."""
     spool = {
         "id": 17,
         "filament": {"id": 2, "material": "PLA", "color_hex": "ffffff", "name": "PLA White",
@@ -161,7 +161,24 @@ def test_duplicate_tag_candidate_found():
         "remaining_weight": 500.0,
     }
     result = bridge.find_duplicate_tag_candidate(
-        filament_id=2, tag_uid="BBBB2222", spools=[spool]
+        material="PLA", color_hex="ffffff", tag_uid="BBBB2222", spools=[spool]
+    )
+    assert result is not None
+    assert result["id"] == 17
+
+
+def test_duplicate_tag_candidate_cross_sub_brand():
+    """Catches duplicate even when sub_brand differs (e.g. Matte vs Basic for same hex)."""
+    spool_basic = {
+        "id": 17,
+        "filament": {"id": 2, "material": "PLA", "color_hex": "ffffff", "name": "PLA Basic Jade White",
+                      "vendor": {"id": 1, "name": "Bambu Lab"}},
+        "extra": {"tag": '"AAAA1111"', "active_tray": '""'},
+        "remaining_weight": 150.0,
+    }
+    # A Matte spool with the same color should still be flagged as potential duplicate
+    result = bridge.find_duplicate_tag_candidate(
+        material="PLA", color_hex="ffffff", tag_uid="BBBB2222", spools=[spool_basic]
     )
     assert result is not None
     assert result["id"] == 17
@@ -176,7 +193,7 @@ def test_duplicate_tag_candidate_skip_assigned():
         "extra": {"tag": '"AAAA1111"', "active_tray": '"A4"'},
     }
     result = bridge.find_duplicate_tag_candidate(
-        filament_id=2, tag_uid="BBBB2222", spools=[spool]
+        material="PLA", color_hex="ffffff", tag_uid="BBBB2222", spools=[spool]
     )
     assert result is None
 
@@ -190,7 +207,7 @@ def test_duplicate_tag_candidate_skip_no_tag():
         "extra": {"tag": '""', "active_tray": '""'},
     }
     result = bridge.find_duplicate_tag_candidate(
-        filament_id=2, tag_uid="BBBB2222", spools=[spool]
+        material="PLA", color_hex="ffffff", tag_uid="BBBB2222", spools=[spool]
     )
     assert result is None
 
@@ -204,13 +221,13 @@ def test_duplicate_tag_candidate_skip_same_tag():
         "extra": {"tag": '"BBBB2222"', "active_tray": '""'},
     }
     result = bridge.find_duplicate_tag_candidate(
-        filament_id=2, tag_uid="BBBB2222", spools=[spool]
+        material="PLA", color_hex="ffffff", tag_uid="BBBB2222", spools=[spool]
     )
     assert result is None
 
 
-def test_duplicate_tag_candidate_wrong_filament():
-    """Skips spools with a different filament ID."""
+def test_duplicate_tag_candidate_wrong_material():
+    """Skips spools with a different material."""
     spool = {
         "id": 17,
         "filament": {"id": 5, "material": "PETG", "color_hex": "000000", "name": "PETG Black",
@@ -218,7 +235,7 @@ def test_duplicate_tag_candidate_wrong_filament():
         "extra": {"tag": '"AAAA1111"', "active_tray": '""'},
     }
     result = bridge.find_duplicate_tag_candidate(
-        filament_id=2, tag_uid="BBBB2222", spools=[spool]
+        material="PLA", color_hex="000000", tag_uid="BBBB2222", spools=[spool]
     )
     assert result is None
 
@@ -233,7 +250,7 @@ def test_duplicate_tag_candidate_skip_empty():
         "remaining_weight": 0.0,
     }
     result = bridge.find_duplicate_tag_candidate(
-        filament_id=3, tag_uid="BBBB2222", spools=[spool]
+        material="PLA", color_hex="000000", tag_uid="BBBB2222", spools=[spool]
     )
     assert result is None
 

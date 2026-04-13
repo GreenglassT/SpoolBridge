@@ -81,6 +81,7 @@ ams_tray_remain = {}       # {slot_key: remain%} — updated separately from cha
 _last_synced_remain = {}   # {slot_key: remain%} — last value written to Spoolman
 printer_telemetry = {}     # live print status (progress, temps, fans, speed, etc.)
 print_start_time = None    # epoch when gcode_state first became RUNNING
+print_start_weight = None  # spool remaining_weight (g) when print started
 _bridge_state_dirty = True # write bridge_state.json only when state changed
 mqtt_client = None          # set in main(); used by publish_external_filament()
 bridge_commands_path = DATA_DIR / "bridge_commands.json"
@@ -177,20 +178,30 @@ def find_spool_by_tag(tag_uid, tray_uuid="", spools=None):
     return None
 
 
-def find_duplicate_tag_candidate(filament_id, tag_uid, spools=None):
+def find_duplicate_tag_candidate(material, color_hex, tag_uid, spools=None):
     """Find an unassigned Bambu spool that might be the same physical spool loaded from the other side.
 
+    Matches by material + color_hex (ignoring sub_brand) so that a Matte spool
+    loaded from the other side still gets caught even if the printer reports
+    a different sub_brand than the original load.
+
     Returns a spool if it has:
-    - The same filament ID
+    - The same material and color hex (prefix-matched for material)
     - An existing RFID tag (confirming it's a Bambu spool)
     - A different tag than the one we're looking for
     - No active tray assignment
     """
     if spools is None:
         spools = sm_get("spool")
+    color_hex = (color_hex or "").lower()[:6]
+    material = (material or "").lower()
     for s in spools:
         f = s.get("filament", {})
-        if f.get("id") != filament_id:
+        f_mat = (f.get("material") or "").lower()
+        f_color = (f.get("color_hex") or "").lower()
+        if f_color != color_hex:
+            continue
+        if not (f_mat == material or f_mat.startswith(material) or material.startswith(f_mat)):
             continue
         extra = s.get("extra", {})
         stored_tag = extra_unquote(extra.get("tag", ""))
@@ -835,6 +846,7 @@ def write_bridge_state():
         "current_vt_tray": current_vt_tray,
         "printer": printer_telemetry,
         "print_start_time": print_start_time,
+        "print_start_weight": print_start_weight,
         "active_spool_id": active_spool_id,
         "active_print_name": active_print_name,
     }
@@ -1033,14 +1045,8 @@ def parse_print_finish(msg_data):
     if gcode_state != "FINISH" and gcode_state != "FAILED":
         return None
 
-    # Try to get filament usage from the print stats
-    # Bambu reports total filament used in the print job
-    total_used = mc_print.get("total_weight", 0)  # grams
     status = gcode_state.lower()  # "finish" or "failed"
-    if total_used and total_used > 0:
-        return {"used_grams": total_used, "status": status}
-
-    return {"used_grams": 0, "status": status}
+    return {"status": status}
 
 
 # ============================================================
@@ -1149,8 +1155,9 @@ def handle_ams_change(new_trays):
                 spool = find_spool_by_tag(tag_uid, tray_uuid, spools=all_spools)
                 if not spool:
                     tag_value = tag_uid or tray_uuid
-                    fil_id = _filament_id_for_tray(tray_data, cached_filaments)
-                    dup = find_duplicate_tag_candidate(fil_id, tag_value, spools=all_spools) if fil_id else None
+                    tray_material = tray_data.get("type", "")
+                    tray_color = tray_data.get("color", "")[:6]
+                    dup = find_duplicate_tag_candidate(tray_material, tray_color, tag_value, spools=all_spools) if tray_material else None
                     if dup:
                         dup_name = (dup.get("filament") or {}).get("name", "?")
                         duplicate_tag_candidates[slot_key] = {
@@ -1208,8 +1215,9 @@ def handle_ams_change(new_trays):
             dup = None
             if not spool:
                 tag_value = tag_uid or tray_uuid
-                fil_id = _filament_id_for_tray(tray_data)
-                dup = find_duplicate_tag_candidate(fil_id, tag_value, spools=all_spools) if fil_id else None
+                tray_material = tray_data.get("type", "")
+                tray_color = tray_data.get("color", "")[:6]
+                dup = find_duplicate_tag_candidate(tray_material, tray_color, tag_value, spools=all_spools) if tray_material else None
                 if dup:
                     dup_name = (dup.get("filament") or {}).get("name", "?")
                     duplicate_tag_candidates[slot_key] = {
@@ -1272,14 +1280,17 @@ def handle_ams_change(new_trays):
 
 def handle_print_finish(finish_data):
     """Handle print completion — update filament weight and log events."""
-    global active_spool_id, active_print_name, print_start_time
+    global active_spool_id, active_print_name, print_start_time, print_start_weight
 
-    used = finish_data.get("used_grams", 0)
     status = finish_data.get("status", "finish")
     print_name = active_print_name
     duration = int(time.time() - print_start_time) if print_start_time else 0
 
-    # Get spool info before updating weight
+    # Final sync of AMS percentages so Spoolman has the latest weight
+    sync_remain_to_spoolman()
+
+    # Calculate grams used from the weight difference (start vs current)
+    used = 0.0
     spool_name = ""
     material = ""
     color_hex = ""
@@ -1290,32 +1301,20 @@ def handle_print_finish(finish_data):
             spool_name = f.get("name", "?")
             material = f.get("material", "?")
             color_hex = f.get("color_hex", "")
+            current_weight = spool.get("remaining_weight", 0)
+            if print_start_weight is not None and print_start_weight > current_weight:
+                used = round(print_start_weight - current_weight, 1)
+                log.info(f"Print {status}: spool #{active_spool_id} {print_start_weight:.0f}g → {current_weight:.0f}g ({used:.1f}g used)")
+            else:
+                log.info(f"Print {status}: spool #{active_spool_id} (no weight change detected)")
         except Exception as e:
             log.warning(f"Could not fetch spool #{active_spool_id} for print log: {e}")
-
-    if used > 0 and active_spool_id:
-        # Check if spool is in an AMS tray (sensor-tracked) or external/third-party
-        is_ams_tracked = False
-        try:
-            active_tray = extra_unquote((spool.get("extra") or {}).get("active_tray", ""))
-            is_ams_tracked = active_tray and active_tray.startswith("A") and active_tray != "External"
-        except Exception:
-            pass
-
-        if is_ams_tracked:
-            log.info(f"Print {status}, used {used:.1f}g from spool #{active_spool_id} (AMS sensor tracks weight)")
-        else:
-            log.info(f"Print {status}, used {used:.1f}g from spool #{active_spool_id}")
-            update_spool_weight(active_spool_id, used)
-    elif used > 0:
-        log.info(f"Print {status}, used {used:.1f}g but no active spool tracked")
-    else:
-        log.info(f"Print {status}, no filament usage reported")
 
     # Skip logging empty records (no spool identified, no filament used)
     if not active_spool_id and used == 0:
         log.info("Skipping print log — no spool tracked and no filament usage")
         active_print_name = ""
+        print_start_weight = None
         return
 
     detail = f"{status}, {used:.1f}g used"
@@ -1340,6 +1339,7 @@ def handle_print_finish(finish_data):
     )
     active_print_name = ""
     print_start_time = None
+    print_start_weight = None
 
 
 # ============================================================
@@ -1398,12 +1398,20 @@ def on_message(client, userdata, msg):
         handle_ams_change(ams)
 
     # Parse live printer telemetry
-    global printer_telemetry, print_start_time
+    global printer_telemetry, print_start_time, print_start_weight, active_spool_id, active_print_name
     telem = parse_printer_telemetry(data)
     if telem:
-        # Track print start time for duration calculation
+        # Track print start time and snapshot spool weight for usage calculation
         if telem["gcode_state"] == "RUNNING" and print_start_time is None:
             print_start_time = time.time()
+            # Snapshot weight so we can calculate grams used at print end
+            if active_spool_id:
+                try:
+                    s = sm_get(f"spool/{active_spool_id}")
+                    print_start_weight = s.get("remaining_weight", 0)
+                    log.info(f"Print start: spool #{active_spool_id} at {print_start_weight:.0f}g")
+                except Exception:
+                    print_start_weight = None
         elif telem["gcode_state"] != "RUNNING":
             print_start_time = None
 
@@ -1417,7 +1425,6 @@ def on_message(client, userdata, msg):
             _bridge_state_dirty = True
 
     # Track which spool is actively printing (AMS tray_now → spool ID)
-    global active_spool_id, active_print_name
     active = parse_active_tray(data)
     if active:
         active_print_name = active["subtask_name"] or active_print_name
@@ -1467,12 +1474,14 @@ def main():
     log.info(f"Spoolman: {SPOOLMAN_URL}")
 
     # Restore print state from previous session if a print was in progress
-    global print_start_time, active_spool_id, active_print_name
+    global print_start_time, print_start_weight, active_spool_id, active_print_name
     try:
         prev = json.loads(bridge_state_path.read_text())
         if prev.get("printer", {}).get("gcode_state") == "RUNNING":
             if prev.get("print_start_time"):
                 print_start_time = prev["print_start_time"]
+            if prev.get("print_start_weight") is not None:
+                print_start_weight = prev["print_start_weight"]
             if prev.get("active_spool_id"):
                 active_spool_id = prev["active_spool_id"]
             if prev.get("active_print_name"):

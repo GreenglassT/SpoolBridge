@@ -201,20 +201,22 @@ def test_ams_change_no_change(mock_sm, mock_find_tag, mock_find_color, mock_upda
 
 @patch("bridge.log_print")
 @patch("bridge.log_event")
-@patch("bridge.update_spool_weight")
+@patch("bridge.sync_remain_to_spoolman")
 @patch("bridge.sm_get")
-def test_print_finish_with_active_spool(mock_sm_get, mock_update_weight, mock_log_event, mock_log_print):
-    """Print finish with active spool and positive grams calls update_spool_weight."""
+def test_print_finish_with_active_spool(mock_sm_get, mock_sync, mock_log_event, mock_log_print):
+    """Print finish calculates grams used from weight difference (start vs current)."""
     bridge.active_spool_id = 42
+    bridge.print_start_weight = 800.0
+    bridge.print_start_time = 1000.0
     mock_sm_get.return_value = {
         "filament": {"name": "Red PLA", "material": "PLA", "color_hex": "ff0000"},
-        "remaining_weight": 800,
+        "remaining_weight": 774.5,
     }
 
-    finish_data = {"used_grams": 25.5, "status": "finish"}
+    finish_data = {"status": "finish"}
     bridge.handle_print_finish(finish_data)
 
-    mock_update_weight.assert_called_once_with(42, 25.5)
+    mock_sync.assert_called_once()
     mock_log_event.assert_called_once()
     mock_log_print.assert_called_once()
     log_print_kwargs = mock_log_print.call_args[1]
@@ -224,39 +226,40 @@ def test_print_finish_with_active_spool(mock_sm_get, mock_update_weight, mock_lo
 
 @patch("bridge.log_print")
 @patch("bridge.log_event")
-@patch("bridge.update_spool_weight")
+@patch("bridge.sync_remain_to_spoolman")
 @patch("bridge.sm_get")
-def test_print_finish_no_active_spool(mock_sm_get, mock_update_weight, mock_log_event, mock_log_print):
-    """Print finish without active spool skips weight update but still logs."""
+def test_print_finish_no_active_spool(mock_sm_get, mock_sync, mock_log_event, mock_log_print):
+    """Print finish without active spool and no weight change skips logging entirely."""
     bridge.active_spool_id = None
+    bridge.print_start_weight = None
+    bridge.print_start_time = None
 
-    finish_data = {"used_grams": 10.0, "status": "finish"}
+    finish_data = {"status": "finish"}
     bridge.handle_print_finish(finish_data)
 
     mock_sm_get.assert_not_called()
-    mock_update_weight.assert_not_called()
-    mock_log_event.assert_called_once()
-    mock_log_print.assert_called_once()
-    log_print_kwargs = mock_log_print.call_args[1]
-    assert log_print_kwargs["spool_id"] is None
+    # No spool, no usage → skipped entirely
+    mock_log_event.assert_not_called()
+    mock_log_print.assert_not_called()
 
 
 @patch("bridge.log_print")
 @patch("bridge.log_event")
-@patch("bridge.update_spool_weight")
+@patch("bridge.sync_remain_to_spoolman")
 @patch("bridge.sm_get")
-def test_print_finish_zero_weight(mock_sm_get, mock_update_weight, mock_log_event, mock_log_print):
-    """Print finish with zero grams skips weight update even if spool is active."""
+def test_print_finish_no_weight_change(mock_sm_get, mock_sync, mock_log_event, mock_log_print):
+    """Print finish with no weight change reports 0g used."""
     bridge.active_spool_id = 99
+    bridge.print_start_weight = 500.0
+    bridge.print_start_time = 1000.0
     mock_sm_get.return_value = {
         "filament": {"name": "Blue PETG", "material": "PETG", "color_hex": "0000ff"},
-        "remaining_weight": 500,
+        "remaining_weight": 500.0,
     }
 
-    finish_data = {"used_grams": 0, "status": "finish"}
+    finish_data = {"status": "finish"}
     bridge.handle_print_finish(finish_data)
 
-    mock_update_weight.assert_not_called()
     mock_log_event.assert_called_once()
     mock_log_print.assert_called_once()
     log_print_kwargs = mock_log_print.call_args[1]

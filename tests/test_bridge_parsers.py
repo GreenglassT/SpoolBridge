@@ -194,17 +194,15 @@ def test_parse_ams_environment_missing():
 # ============================================================
 
 def test_parse_print_finish_success():
-    """FINISH state with weight returns status 'finish' and grams used."""
+    """FINISH state returns status 'finish' (grams calculated separately from weight diff)."""
     msg_data = {
         "print": {
             "gcode_state": "FINISH",
-            "total_weight": 42.5,
         }
     }
     result = parse_print_finish(msg_data)
     assert result is not None
     assert result["status"] == "finish"
-    assert result["used_grams"] == 42.5
 
 
 def test_parse_print_finish_failed():
@@ -212,31 +210,27 @@ def test_parse_print_finish_failed():
     msg_data = {
         "print": {
             "gcode_state": "FAILED",
-            "total_weight": 10.0,
         }
     }
     result = parse_print_finish(msg_data)
     assert result is not None
     assert result["status"] == "failed"
-    assert result["used_grams"] == 10.0
 
 
 def test_parse_print_finish_no_weight():
-    """FINISH state with zero (or absent) weight returns used_grams=0."""
+    """FINISH state returns status only (weight diff is computed in handle_print_finish)."""
     msg_data = {
         "print": {
             "gcode_state": "FINISH",
-            "total_weight": 0,
         }
     }
     result = parse_print_finish(msg_data)
     assert result is not None
     assert result["status"] == "finish"
-    assert result["used_grams"] == 0
 
 
 def test_parse_print_finish_running():
     """Non-finish states (RUNNING, IDLE, PREPARE, etc.) return None."""
     for state in ("RUNNING", "IDLE", "PREPARE", "PAUSED", ""):
-        msg_data = {"print": {"gcode_state": state, "total_weight": 100}}
+        msg_data = {"print": {"gcode_state": state}}
         assert parse_print_finish(msg_data) is None, f"Expected None for state={state!r}"

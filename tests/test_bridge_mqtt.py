@@ -127,7 +127,6 @@ def test_on_message_state_transition(tmp_scripts_dir):
     data = {
         "print": {
             "gcode_state": "FINISH",
-            "total_weight": 25.0,
         }
     }
     client = MagicMock()
@@ -138,7 +137,6 @@ def test_on_message_state_transition(tmp_scripts_dir):
     mock_finish.assert_called_once()
     called_arg = mock_finish.call_args[0][0]
     assert called_arg["status"] == "finish"
-    assert called_arg["used_grams"] == 25.0
 
 
 def test_on_message_no_double_fire(tmp_scripts_dir):
