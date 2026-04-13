@@ -19,10 +19,11 @@ import bridge
 # Helpers
 # ============================================================
 
-def make_msg(data):
+def make_msg(data, topic="device/TEST_SERIAL/report"):
     """Create a mock MQTT message with a JSON payload."""
     msg = MagicMock()
     msg.payload = json.dumps(data).encode()
+    msg.topic = topic
     return msg
 
 
@@ -31,13 +32,15 @@ def make_msg(data):
 # ============================================================
 
 def test_on_connect_subscribes(tmp_scripts_dir):
-    """on_connect with rc=0 subscribes to report topic and publishes pushall."""
+    """on_connect with rc=0 subscribes to report + request topics and publishes pushall."""
     bridge.PRINTER_SERIAL = "TEST_SERIAL"
 
     client = MagicMock()
     bridge.on_connect(client, None, {}, 0)
 
-    client.subscribe.assert_called_once_with("device/TEST_SERIAL/report")
+    topics = [call[0][0] for call in client.subscribe.call_args_list]
+    assert "device/TEST_SERIAL/report" in topics
+    assert "device/TEST_SERIAL/request" in topics
     client.publish.assert_called_once()
     publish_args = client.publish.call_args
     assert publish_args[0][0] == "device/TEST_SERIAL/request"
@@ -155,6 +158,109 @@ def test_on_message_no_double_fire(tmp_scripts_dir):
         bridge.on_message(client, None, make_msg(data))
 
     mock_finish.assert_not_called()
+
+
+# ============================================================
+# Request topic (OpenSpool tag reads)
+# ============================================================
+
+def test_parse_request_filament_setting_valid():
+    """Valid ams_filament_setting with ams_id=255 returns parsed dict."""
+    data = {
+        "print": {
+            "command": "ams_filament_setting",
+            "ams_id": 255,
+            "tray_type": "PLA",
+            "tray_color": "ff0000ff",
+            "nozzle_temp_min": 190,
+            "nozzle_temp_max": 230,
+        }
+    }
+    result = bridge.parse_request_filament_setting(data)
+    assert result is not None
+    assert result["type"] == "PLA"
+    assert result["color"] == "FF0000"
+    assert result["nozzle_min"] == 190
+    assert result["nozzle_max"] == 230
+
+
+def test_parse_request_filament_setting_wrong_command():
+    """Non-matching command returns None."""
+    data = {"print": {"command": "pushall", "ams_id": 255, "tray_type": "PLA"}}
+    assert bridge.parse_request_filament_setting(data) is None
+
+
+def test_parse_request_filament_setting_ams_tray():
+    """ams_id=0 (AMS tray, not external) returns None."""
+    data = {
+        "print": {
+            "command": "ams_filament_setting",
+            "ams_id": 0,
+            "tray_type": "PLA",
+            "tray_color": "ff0000ff",
+        }
+    }
+    assert bridge.parse_request_filament_setting(data) is None
+
+
+def test_request_topic_triggers_vt_handler(tmp_scripts_dir):
+    """ams_filament_setting on request topic calls handle_vt_tray_change."""
+    bridge._last_own_publish_time = 0
+    data = {
+        "print": {
+            "command": "ams_filament_setting",
+            "ams_id": 255,
+            "tray_type": "PETG",
+            "tray_color": "00ff00ff",
+            "nozzle_temp_min": 220,
+            "nozzle_temp_max": 250,
+        }
+    }
+    client = MagicMock()
+    with patch.object(bridge, "handle_vt_tray_change") as mock_vt:
+        bridge.on_message(client, None, make_msg(data, topic="device/TEST_SERIAL/request"))
+
+    mock_vt.assert_called_once()
+    called_arg = mock_vt.call_args[0][0]
+    assert called_arg["type"] == "PETG"
+    assert called_arg["color"] == "00FF00"
+
+
+def test_request_topic_ignores_own_publish(tmp_scripts_dir):
+    """Messages within 2s of our own publish are ignored (echo suppression)."""
+    import time as _time
+    bridge._last_own_publish_time = _time.time()
+    data = {
+        "print": {
+            "command": "ams_filament_setting",
+            "ams_id": 255,
+            "tray_type": "PLA",
+            "tray_color": "ffffffff",
+        }
+    }
+    client = MagicMock()
+    with patch.object(bridge, "handle_vt_tray_change") as mock_vt:
+        bridge.on_message(client, None, make_msg(data, topic="device/TEST_SERIAL/request"))
+
+    mock_vt.assert_not_called()
+
+
+def test_request_topic_ignores_ams_tray(tmp_scripts_dir):
+    """ams_id=0 on request topic does not trigger handle_vt_tray_change."""
+    bridge._last_own_publish_time = 0
+    data = {
+        "print": {
+            "command": "ams_filament_setting",
+            "ams_id": 0,
+            "tray_type": "PLA",
+            "tray_color": "ffffffff",
+        }
+    }
+    client = MagicMock()
+    with patch.object(bridge, "handle_vt_tray_change") as mock_vt:
+        bridge.on_message(client, None, make_msg(data, topic="device/TEST_SERIAL/request"))
+
+    mock_vt.assert_not_called()
 
 
 def test_on_message_bad_json(tmp_scripts_dir):
