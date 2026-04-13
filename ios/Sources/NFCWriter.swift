@@ -37,7 +37,9 @@ class NFCWriter: NSObject, ObservableObject, NFCNDEFReaderSessionDelegate {
             let nfcError = error as? NFCReaderError
             if nfcError?.code == .readerSessionInvalidationErrorUserCanceled {
                 self.status = .idle
-            } else if self.status != .success("") && !"\(self.status)".hasPrefix("success") {
+            } else if case .success = self.status {
+                // Already succeeded — don't overwrite with error
+            } else {
                 self.status = .error(error.localizedDescription)
             }
             self.onComplete?(nil)

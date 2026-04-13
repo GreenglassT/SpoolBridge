@@ -34,6 +34,7 @@ load_env()
 
 SPOOLMAN_URL = os.environ.get("SPOOLMAN_URL", "http://localhost:7912")
 SPOOLMAN_PUBLIC_URL = os.environ.get("SPOOLMAN_PUBLIC_URL", "")
+OPENSPOOL_URL = os.environ.get("OPENSPOOL_URL", "http://openspool-f195fc.local")
 SCRIPTS_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent))
 BRIDGE_COMMANDS_PATH = SCRIPTS_DIR / "bridge_commands.json"
 PORT = int(os.environ.get("PORT", 5555))
@@ -543,6 +544,50 @@ def get_tag(spool_id):
     tag = build_openspool_tag(spool)
     spool_url = f"{request.host_url}spool/{spool_id}"
     return jsonify({"tag_json": tag, "spool_url": spool_url, "spool": spool})
+
+
+# ── OpenSpool NFC Write ───────────────────────────────────────
+
+@app.route("/api/openspool/write/<int:spool_id>", methods=["POST"])
+def openspool_write_tag(spool_id):
+    """Send filament data to OpenSpool device and trigger NFC tag write.
+
+    Sets filament params on the ESP32 via ESPHome REST API (entity-name
+    URLs with spaces), then presses Write NFC.  The device enters write
+    mode for 30 seconds, then auto-cancels back to read mode.
+    """
+    try:
+        r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}")
+        r.raise_for_status()
+        spool = r.json()
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": f"Failed to fetch spool: {e}"}), 502
+
+    tag = build_openspool_tag(spool)
+    public = SPOOLMAN_PUBLIC_URL or request.host_url.rstrip("/")
+
+    try:
+        session = http_requests.Session()
+        for endpoint, params in [
+            ("select/Filament Type/set", {"option": tag["type"]}),
+            ("select/Filament Brand/set", {"option": tag["brand"]}),
+            ("text/Custom Color Hex/set", {"value": tag["color_hex"]}),
+            ("number/Filament Min Temp/set", {"value": tag["min_temp"]}),
+            ("number/Filament Max Temp/set", {"value": tag["max_temp"]}),
+            ("text/Spool URL/set", {"value": f"{public}/spool/{spool_id}"}),
+        ]:
+            resp = session.post(f"{OPENSPOOL_URL}/{endpoint}", params=params, timeout=2)
+            resp.raise_for_status()
+        # Trigger write after all fields are set
+        session.post(f"{OPENSPOOL_URL}/button/Write NFC/press", timeout=2).raise_for_status()
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": f"Failed to reach OpenSpool device: {e}"}), 502
+
+    return jsonify({
+        "status": "writing",
+        "message": "OpenSpool is waiting for tag (30s timeout). Tap an NTAG215 on the reader.",
+        "tag_data": tag,
+    })
 
 
 # ── Spoolman Proxy Routes ────────────────────────────────────
