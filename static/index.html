@@ -2188,6 +2188,12 @@ async function selectTagSpool(id) {
             </ol>
           </div>
           `}
+          <div style="margin-bottom:16px; padding:12px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;">
+            <div style="font-weight:600; margin-bottom:8px;">Write via OpenSpool Mini</div>
+            <p class="muted" style="font-size:0.78rem; margin-bottom:10px;">Send to the ESP32 NFC reader. Tap an NTAG215 on the reader within 30 seconds.</p>
+            <button class="btn btn-primary" id="btn-openspool-write" onclick="writeOpenSpoolTag(${id})">OpenSpool Write</button>
+            <span id="openspool-write-status" class="muted" style="margin-left:10px; font-size:0.78rem;"></span>
+          </div>
           <div style="margin-bottom:14px;">
             <span class="form-label">OpenSpool JSON</span>
             <span class="dim" style="font-size:0.72rem; margin-left:8px;">MIME: application/json</span>
@@ -2245,6 +2251,44 @@ async function writeNfcTag() {
     btn.disabled = false;
     btn.textContent = 'Write Tag';
   }
+}
+
+async function writeOpenSpoolTag(spoolId) {
+  const btn = document.getElementById('btn-openspool-write');
+  const status = document.getElementById('openspool-write-status');
+  if (!btn || !spoolId) return;
+
+  btn.disabled = true;
+  status.textContent = '';
+  status.style.color = '';
+
+  try {
+    await api(`/api/openspool/write/${spoolId}`, { method: 'POST' });
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'OpenSpool Write';
+    status.textContent = 'Failed: ' + e.message;
+    status.style.color = 'var(--red)';
+    toast('OpenSpool write failed: ' + e.message, 'error');
+    return;
+  }
+
+  toast('OpenSpool is waiting for tag...', 'success');
+  let remaining = 30;
+  btn.textContent = `Waiting for tag... (${remaining}s)`;
+
+  const timer = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) {
+      clearInterval(timer);
+      btn.disabled = false;
+      btn.textContent = 'OpenSpool Write';
+      status.textContent = 'Timeout — try again';
+      status.style.color = 'var(--text-muted)';
+    } else {
+      btn.textContent = `Waiting for tag... (${remaining}s)`;
+    }
+  }, 1000);
 }
 
 function copyTag() {
