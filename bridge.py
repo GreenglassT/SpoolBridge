@@ -85,6 +85,10 @@ print_start_weight = None  # spool remaining_weight (g) when print started
 _bridge_state_dirty = True # write bridge_state.json only when state changed
 mqtt_client = None          # set in main(); used by publish_external_filament()
 _last_own_publish_time = 0  # epoch; skip our own ams_filament_setting echoes
+# Window for suppressing our own echoes on the request topic. The printer
+# broadcasts ams_filament_setting back to subscribers, so we ignore anything
+# that arrives within this many seconds of our own publish.
+ECHO_SUPPRESS_SECONDS = 2
 bridge_commands_path = DATA_DIR / "bridge_commands.json"
 
 
@@ -735,6 +739,7 @@ def publish_filament_setting(spool, ams_id=255, tray_id=254):
     For the external tray use ams_id=255, tray_id=254 (default).
     For AMS trays use ams_id=0, tray_id=0-3.
     """
+    global _last_own_publish_time
     f = spool.get("filament", {})
     material = (f.get("material") or "PLA").strip()
     color_hex = (f.get("color_hex") or "000000").lower()
@@ -763,7 +768,6 @@ def publish_filament_setting(spool, ams_id=255, tray_id=254):
 
     request_topic = f"device/{PRINTER_SERIAL}/request"
     mqtt_client.publish(request_topic, json.dumps(payload))
-    global _last_own_publish_time
     _last_own_publish_time = time.time()
     tray_label = "External" if ams_id == 255 else f"A{tray_id + 1}"
     log.info(
@@ -920,7 +924,7 @@ def parse_vt_tray(msg_data):
 
     return {
         "type": tray_type,
-        "color": tray_color[:6] if tray_color else "",
+        "color": tray_color[:6].upper() if tray_color else "",
         "nozzle_min": vt.get("nozzle_temp_min", 0),
         "nozzle_max": vt.get("nozzle_temp_max", 0),
     }
@@ -1393,8 +1397,6 @@ def on_disconnect(client, userdata, rc, properties=None, reason_code=None):
 
 def _handle_request_message(data):
     """Handle messages on the request topic (OpenSpool tag reads)."""
-    if time.time() - _last_own_publish_time < 2:
-        return
     fs = parse_request_filament_setting(data)
     if fs:
         log.info(f"OpenSpool tag read: {fs['type']} #{fs['color']}")
@@ -1402,13 +1404,20 @@ def _handle_request_message(data):
 
 
 def on_message(client, userdata, msg):
+    if msg.topic.endswith("/request"):
+        # Skip echoes of our own publish without even decoding the payload.
+        if time.time() - _last_own_publish_time < ECHO_SUPPRESS_SECONDS:
+            return
+        try:
+            data = json.loads(msg.payload)
+        except json.JSONDecodeError:
+            return
+        _handle_request_message(data)
+        return
+
     try:
         data = json.loads(msg.payload)
     except json.JSONDecodeError:
-        return
-
-    if msg.topic.endswith("/request"):
-        _handle_request_message(data)
         return
 
     # Parse external spool (virtual tray)

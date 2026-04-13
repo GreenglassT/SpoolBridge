@@ -2253,10 +2253,14 @@ async function writeNfcTag() {
   }
 }
 
+let _openspoolTimer = null;
+
 async function writeOpenSpoolTag(spoolId) {
   const btn = document.getElementById('btn-openspool-write');
   const status = document.getElementById('openspool-write-status');
   if (!btn || !spoolId) return;
+
+  if (_openspoolTimer) { clearInterval(_openspoolTimer); _openspoolTimer = null; }
 
   btn.disabled = true;
   status.textContent = '';
@@ -2277,10 +2281,18 @@ async function writeOpenSpoolTag(spoolId) {
   let remaining = 30;
   btn.textContent = `Waiting for tag... (${remaining}s)`;
 
-  const timer = setInterval(() => {
+  _openspoolTimer = setInterval(() => {
+    // Bail if the button was removed (user selected a different spool).
+    const liveBtn = document.getElementById('btn-openspool-write');
+    if (!liveBtn || liveBtn !== btn) {
+      clearInterval(_openspoolTimer);
+      _openspoolTimer = null;
+      return;
+    }
     remaining--;
     if (remaining <= 0) {
-      clearInterval(timer);
+      clearInterval(_openspoolTimer);
+      _openspoolTimer = null;
       btn.disabled = false;
       btn.textContent = 'OpenSpool Write';
       status.textContent = 'Timeout — try again';
