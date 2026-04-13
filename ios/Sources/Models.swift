@@ -96,18 +96,24 @@ struct TagResponse: Codable {
 
 struct TagData: Codable {
     let version: String?
-    let protocol: String?
+    let `protocol`: String?
     let colorHex: String?
     let type: String?
-    let minTemp: Int?
-    let maxTemp: Int?
+    let minTemp: String?
+    let maxTemp: String?
     let brand: String?
 
     enum CodingKeys: String, CodingKey {
-        case version, protocol, type, brand
+        case version, `protocol`, type, brand
         case colorHex = "color_hex"
         case minTemp = "min_temp"
         case maxTemp = "max_temp"
+    }
+
+    func toData() -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return (try? encoder.encode(self)) ?? Data()
     }
 
     func toJsonString() -> String {
@@ -115,10 +121,5 @@ struct TagData: Codable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(self) else { return "{}" }
         return String(data: data, encoding: .utf8) ?? "{}"
-    }
-
-    func toData() -> Data {
-        let encoder = JSONEncoder()
-        return (try? encoder.encode(self)) ?? Data()
     }
 }
