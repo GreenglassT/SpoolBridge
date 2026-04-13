@@ -84,6 +84,7 @@ print_start_time = None    # epoch when gcode_state first became RUNNING
 print_start_weight = None  # spool remaining_weight (g) when print started
 _bridge_state_dirty = True # write bridge_state.json only when state changed
 mqtt_client = None          # set in main(); used by publish_external_filament()
+_last_own_publish_time = 0  # epoch; skip our own ams_filament_setting echoes
 bridge_commands_path = DATA_DIR / "bridge_commands.json"
 
 
@@ -762,6 +763,8 @@ def publish_filament_setting(spool, ams_id=255, tray_id=254):
 
     request_topic = f"device/{PRINTER_SERIAL}/request"
     mqtt_client.publish(request_topic, json.dumps(payload))
+    global _last_own_publish_time
+    _last_own_publish_time = time.time()
     tray_label = "External" if ams_id == 255 else f"A{tray_id + 1}"
     log.info(
         f"Published filament to {tray_label}: {tray_type} #{color_hex} "
@@ -920,6 +923,23 @@ def parse_vt_tray(msg_data):
         "color": tray_color[:6] if tray_color else "",
         "nozzle_min": vt.get("nozzle_temp_min", 0),
         "nozzle_max": vt.get("nozzle_temp_max", 0),
+    }
+
+
+def parse_request_filament_setting(msg_data):
+    """Parse ams_filament_setting from the request topic (OpenSpool tag reads)."""
+    p = msg_data.get("print", {})
+    if p.get("command") != "ams_filament_setting" or p.get("ams_id") != 255:
+        return None
+    tray_color = p.get("tray_color", "")
+    tray_type = p.get("tray_type", "")
+    if not tray_type:
+        return None
+    return {
+        "type": tray_type,
+        "color": tray_color[:6].upper() if tray_color else "",
+        "nozzle_min": p.get("nozzle_temp_min", 0),
+        "nozzle_max": p.get("nozzle_temp_max", 0),
     }
 
 
@@ -1353,8 +1373,11 @@ def on_connect(client, userdata, flags, rc, properties=None):
         log.info(f"Connected to P2S at {PRINTER_IP}")
         log.info(f"Subscribed to {topic}")
 
-        # Request full status dump
         request_topic = f"device/{PRINTER_SERIAL}/request"
+        client.subscribe(request_topic)
+        log.info(f"Subscribed to {request_topic}")
+
+        # Request full status dump
         client.publish(request_topic, json.dumps({"pushing": {"command": "pushall"}}))
     else:
         log.error(f"MQTT connect failed: rc={rc}")
@@ -1368,10 +1391,24 @@ def on_disconnect(client, userdata, rc, properties=None, reason_code=None):
         log.warning(f"Could not write disconnect state: {e}")
 
 
+def _handle_request_message(data):
+    """Handle messages on the request topic (OpenSpool tag reads)."""
+    if time.time() - _last_own_publish_time < 2:
+        return
+    fs = parse_request_filament_setting(data)
+    if fs:
+        log.info(f"OpenSpool tag read: {fs['type']} #{fs['color']}")
+        handle_vt_tray_change(fs)
+
+
 def on_message(client, userdata, msg):
     try:
         data = json.loads(msg.payload)
     except json.JSONDecodeError:
+        return
+
+    if msg.topic.endswith("/request"):
+        _handle_request_message(data)
         return
 
     # Parse external spool (virtual tray)
