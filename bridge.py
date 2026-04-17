@@ -35,6 +35,7 @@ from config import (
     load_env, TRAY_EXTERNAL,
     get_openspool_type, get_filament_code, tray_location,
     extra_quote, extra_unquote, is_real_tag,
+    write_json_atomic, write_text_atomic,
 )
 
 load_env()
@@ -90,6 +91,7 @@ _last_own_publish_time = 0  # epoch; skip our own ams_filament_setting echoes
 # that arrives within this many seconds of our own publish.
 ECHO_SUPPRESS_SECONDS = 2
 bridge_commands_path = DATA_DIR / "bridge_commands.json"
+clear_candidates_dir = DATA_DIR / "clear_candidates"
 
 
 
@@ -108,14 +110,17 @@ def ensure_extra_fields():
     """Register required extra fields in Spoolman if not already present."""
     required = ["tag", "tag2", "active_tray"]
     try:
-        existing = requests.get(f"{SPOOLMAN_URL}/api/v1/field/spool").json()
+        r = requests.get(f"{SPOOLMAN_URL}/api/v1/field/spool")
+        r.raise_for_status()
+        existing = r.json()
         existing_names = {f["name"] for f in existing}
         for name in required:
             if name not in existing_names:
-                requests.post(
+                pr = requests.post(
                     f"{SPOOLMAN_URL}/api/v1/field/spool/{name}",
                     json={"name": name, "field_type": "text"},
                 )
+                pr.raise_for_status()
                 log.info(f"Registered Spoolman extra field: {name}")
     except Exception as e:
         log.warning(f"Could not register extra fields: {e}")
@@ -183,8 +188,8 @@ def find_spool_by_tag(tag_uid, tray_uuid="", spools=None):
     return None
 
 
-def find_duplicate_tag_candidate(material, color_hex, tag_uid, spools=None):
-    """Find an unassigned Bambu spool that might be the same physical spool loaded from the other side.
+def find_duplicate_tag_candidate(material, color_hex, tag_uid, spools=None, tray_name=None):
+    """Find a Bambu spool that might be the same physical spool loaded from the other side.
 
     Matches by material + color_hex (ignoring sub_brand) so that a Matte spool
     loaded from the other side still gets caught even if the printer reports
@@ -194,7 +199,9 @@ def find_duplicate_tag_candidate(material, color_hex, tag_uid, spools=None):
     - The same material and color hex (prefix-matched for material)
     - An existing RFID tag (confirming it's a Bambu spool)
     - A different tag than the one we're looking for
-    - No active tray assignment
+    - No active tray assignment, OR an active_tray that matches `tray_name`
+      (the spool claimed to be in this tray but its tag no longer matches —
+      almost always a flipped Bambu spool).
     """
     if spools is None:
         spools = sm_get("spool")
@@ -215,7 +222,7 @@ def find_duplicate_tag_candidate(material, color_hex, tag_uid, spools=None):
         if stored_tag == tag_uid:
             continue
         active_tray = extra_unquote(extra.get("active_tray", ""))
-        if active_tray:
+        if active_tray and active_tray != tray_name:
             continue
         # Skip empty spools — likely a used-up spool being replaced by a refill
         if s.get("remaining_weight", 0) <= 0:
@@ -552,6 +559,7 @@ def auto_create_bambu_spool(tray_data, tray_name, remain_pct=None,
         if not vendor_id:
             r = requests.post(f"{SPOOLMAN_URL}/api/v1/vendor",
                               json={"name": "Bambu Lab", "empty_spool_weight": 251.0})
+            r.raise_for_status()
             vendor_id = r.json()["id"]
 
         if filaments is None:
@@ -591,6 +599,7 @@ def auto_create_bambu_spool(tray_data, tray_name, remain_pct=None,
                 "settings_extruder_temp": nozzle_min,
             }
             r = requests.post(f"{SPOOLMAN_URL}/api/v1/filament", json=fil_data)
+            r.raise_for_status()
             filament_id = r.json()["id"]
             log.info(f"Auto-created filament: {display_name} (#{filament_id})")
 
@@ -604,6 +613,7 @@ def auto_create_bambu_spool(tray_data, tray_name, remain_pct=None,
             "location": tray_location(tray_name),
         }
         r = requests.post(f"{SPOOLMAN_URL}/api/v1/spool", json=spool_data)
+        r.raise_for_status()
         spool = r.json()
         spool_id = spool["id"]
 
@@ -803,7 +813,8 @@ def _append_jsonl(filename, record, cap):
         if _jsonl_counts[filename] > cap:
             keep = int(cap * 0.8)  # trim to 80% of cap
             lines = path.read_text().strip().splitlines()[-keep:]
-            path.write_text("\n".join(lines) + "\n")
+            # Atomic trim: a crash mid-rewrite used to truncate the file.
+            write_text_atomic(path, "\n".join(lines) + "\n")
             _jsonl_counts[filename] = len(lines)
     except Exception as e:
         log.error(f"Failed to write {filename}: {e}")
@@ -858,9 +869,46 @@ def write_bridge_state():
         "active_print_name": active_print_name,
     }
     try:
-        bridge_state_path.write_text(json.dumps(state, indent=2))
+        write_json_atomic(bridge_state_path, state, indent=2)
     except Exception as e:
         log.error(f"Failed to write bridge_state.json: {e}")
+
+
+def process_clear_candidates():
+    """Drop duplicate-tag candidates the user has resolved via the web UI.
+
+    The server drops a marker file per resolved tag in `clear_candidates/`;
+    we pop matching in-memory entries so the bridge's next state-write
+    doesn't revert the server's removal. Without this, the candidate
+    reappears in the UI every ~2s.
+    """
+    global _bridge_state_dirty
+    if not clear_candidates_dir.exists():
+        return
+    for marker in list(clear_candidates_dir.iterdir()):
+        if not marker.is_file():
+            continue
+        try:
+            new_tag = marker.read_text().strip()
+        except Exception as e:
+            log.warning(f"Unreadable clear marker {marker.name}: {e}")
+            try:
+                marker.unlink()
+            except Exception:
+                pass
+            continue
+        removed = 0
+        for slot_key, cand in list(duplicate_tag_candidates.items()):
+            if cand.get("new_tag") == new_tag:
+                duplicate_tag_candidates.pop(slot_key, None)
+                removed += 1
+        if removed:
+            log.info(f"Cleared {removed} duplicate candidate(s) for tag {new_tag[:8]}...")
+            _bridge_state_dirty = True
+        try:
+            marker.unlink()
+        except Exception:
+            pass
 
 
 def process_commands():
@@ -1181,7 +1229,7 @@ def handle_ams_change(new_trays):
                     tag_value = tag_uid or tray_uuid
                     tray_material = tray_data.get("type", "")
                     tray_color = tray_data.get("color", "")[:6]
-                    dup = find_duplicate_tag_candidate(tray_material, tray_color, tag_value, spools=all_spools) if tray_material else None
+                    dup = find_duplicate_tag_candidate(tray_material, tray_color, tag_value, spools=all_spools, tray_name=tray_name) if tray_material else None
                     if dup:
                         dup_name = (dup.get("filament") or {}).get("name", "?")
                         duplicate_tag_candidates[slot_key] = {
@@ -1390,7 +1438,10 @@ def on_connect(client, userdata, flags, rc, properties=None):
 def on_disconnect(client, userdata, rc, properties=None, reason_code=None):
     log.warning(f"Disconnected from MQTT (rc={rc}), reconnecting...")
     try:
-        bridge_state_path.write_text(json.dumps({"connected": False, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}))
+        write_json_atomic(
+            bridge_state_path,
+            {"connected": False, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")},
+        )
     except Exception as e:
         log.warning(f"Could not write disconnect state: {e}")
 
@@ -1521,24 +1572,26 @@ def main():
 
     # Restore print state from previous session if a print was in progress
     global print_start_time, print_start_weight, active_spool_id, active_print_name
-    try:
-        prev = json.loads(bridge_state_path.read_text())
-        if prev.get("printer", {}).get("gcode_state") == "RUNNING":
-            if prev.get("print_start_time"):
-                print_start_time = prev["print_start_time"]
-            if prev.get("print_start_weight") is not None:
-                print_start_weight = prev["print_start_weight"]
-            if prev.get("active_spool_id"):
-                active_spool_id = prev["active_spool_id"]
-            if prev.get("active_print_name"):
-                active_print_name = prev["active_print_name"]
-            log.info(f"Restored print state: spool #{active_spool_id}, \"{active_print_name}\"")
-    except Exception:
-        pass
+    if bridge_state_path.exists():
+        try:
+            prev = json.loads(bridge_state_path.read_text())
+            if prev.get("printer", {}).get("gcode_state") == "RUNNING":
+                if prev.get("print_start_time"):
+                    print_start_time = prev["print_start_time"]
+                if prev.get("print_start_weight") is not None:
+                    print_start_weight = prev["print_start_weight"]
+                if prev.get("active_spool_id"):
+                    active_spool_id = prev["active_spool_id"]
+                if prev.get("active_print_name"):
+                    active_print_name = prev["active_print_name"]
+                log.info(f"Restored print state: spool #{active_spool_id}, \"{active_print_name}\"")
+        except Exception as e:
+            log.warning(f"Could not restore print state from bridge_state.json: {e}")
 
     # Verify Spoolman is reachable
     try:
         info = requests.get(f"{SPOOLMAN_URL}/api/v1/info", timeout=5)
+        info.raise_for_status()
         log.info(f"Spoolman OK: v{info.json().get('version', '?')}")
     except Exception as e:
         log.error(f"Cannot reach Spoolman at {SPOOLMAN_URL}: {e}")
@@ -1577,6 +1630,8 @@ def main():
         poll_counter = 0
         while True:
             process_commands()
+            process_clear_candidates()
+            write_bridge_state()
             time.sleep(2)
             poll_counter += 1
             if poll_counter >= 15:  # pushall every 30s (15 * 2s)

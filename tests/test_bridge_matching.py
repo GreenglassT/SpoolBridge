@@ -185,7 +185,7 @@ def test_duplicate_tag_candidate_cross_sub_brand():
 
 
 def test_duplicate_tag_candidate_skip_assigned():
-    """Skips spools that are currently assigned to a tray."""
+    """Skips spools assigned to a *different* tray than the one we're looking at."""
     spool = {
         "id": 17,
         "filament": {"id": 2, "material": "PLA", "color_hex": "ffffff", "name": "PLA White",
@@ -193,9 +193,30 @@ def test_duplicate_tag_candidate_skip_assigned():
         "extra": {"tag": '"AAAA1111"', "active_tray": '"A4"'},
     }
     result = bridge.find_duplicate_tag_candidate(
-        material="PLA", color_hex="ffffff", tag_uid="BBBB2222", spools=[spool]
+        material="PLA", color_hex="ffffff", tag_uid="BBBB2222", spools=[spool],
+        tray_name="A1",
     )
     assert result is None
+
+
+def test_duplicate_tag_candidate_matches_same_tray():
+    """Accepts a spool whose active_tray matches the tray currently reporting the
+    unknown tag — classic case of a Bambu spool being flipped so the AMS now sees
+    the RFID on the other side.
+    """
+    spool = {
+        "id": 17,
+        "filament": {"id": 2, "material": "PLA", "color_hex": "8E9089", "name": "PLA Basic Gray",
+                      "vendor": {"id": 1, "name": "Bambu Lab"}},
+        "extra": {"tag": '"AAAA1111"', "active_tray": '"A3"'},
+        "remaining_weight": 880.0,
+    }
+    result = bridge.find_duplicate_tag_candidate(
+        material="PLA", color_hex="8E9089", tag_uid="D25161EC", spools=[spool],
+        tray_name="A3",
+    )
+    assert result is not None
+    assert result["id"] == 17
 
 
 def test_duplicate_tag_candidate_skip_no_tag():

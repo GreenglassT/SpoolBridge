@@ -4,8 +4,37 @@ Shared configuration and constants for SpoolBridge.
 Used by bridge.py, server.py, and write_tags.py.
 """
 
+import json
 import os
 from pathlib import Path
+
+
+def write_json_atomic(path, data, indent=None):
+    """Write JSON to path atomically: write to .tmp sibling, fsync, rename.
+
+    Prevents corruption / truncation if the process crashes or the disk
+    fills mid-write — the destination file either holds the old bytes or
+    the complete new bytes, never a half-written mix.
+    """
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    payload = json.dumps(data, indent=indent)
+    with open(tmp, "w") as f:
+        f.write(payload)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def write_text_atomic(path, text):
+    """Write text to path atomically via .tmp + rename. See write_json_atomic."""
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 # ============================================================
 # ENVIRONMENT

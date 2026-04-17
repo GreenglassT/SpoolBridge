@@ -61,6 +61,10 @@ def flask_client(tmp_path):
     import server
 
     server.SCRIPTS_DIR = tmp_path
+    # SCRIPTS_DIR/CLEAR_CANDIDATES_DIR are resolved at import time, so rebind
+    # the derived paths too — otherwise tests leak markers into the repo root.
+    server.CLEAR_CANDIDATES_DIR = tmp_path / "clear_candidates"
+    server.BRIDGE_COMMANDS_PATH = tmp_path / "bridge_commands.json"
     server.app.config["TESTING"] = True
     with server.app.test_client() as client:
         yield client

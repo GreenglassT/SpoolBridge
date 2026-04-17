@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -24,7 +25,12 @@ import requests as http_requests
 from config import (
     load_env, VALID_TRAYS, TRAY_EXTERNAL, LOCATION_AMS, LOCATION_STORAGE, LOCATION_EXTERNAL,
     tray_location, build_openspool_tag, extra_quote, extra_unquote,
+    write_json_atomic, write_text_atomic,
 )
+
+import logging
+
+log = logging.getLogger("spoolbridge.server")
 
 # ============================================================
 # CONFIGURATION
@@ -37,6 +43,7 @@ SPOOLMAN_PUBLIC_URL = os.environ.get("SPOOLMAN_PUBLIC_URL", "")
 OPENSPOOL_URL = os.environ.get("OPENSPOOL_URL", "http://openspool-f195fc.local")
 SCRIPTS_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent))
 BRIDGE_COMMANDS_PATH = SCRIPTS_DIR / "bridge_commands.json"
+CLEAR_CANDIDATES_DIR = SCRIPTS_DIR / "clear_candidates"
 PORT = int(os.environ.get("PORT", 5555))
 
 DEFAULT_SPOOL_WEIGHT = 200.0   # empty spool weight if vendor doesn't specify
@@ -48,19 +55,37 @@ DEFAULT_NET_WEIGHT = 1000.0    # filament net weight default
 
 
 def _remove_duplicate_candidate(new_tag):
-    """Remove a duplicate tag candidate from bridge_state.json."""
-    state_file = SCRIPTS_DIR / "bridge_state.json"
-    if not state_file.exists():
+    """Ask the bridge to drop a duplicate-tag candidate from its in-memory state.
+
+    We write a marker file; the bridge pops the matching entry on its next
+    tick and rewrites bridge_state.json. Writing bridge_state.json directly
+    from the web process would race with the bridge's own writes — the
+    bridge's stale in-memory dict would silently resurface the candidate.
+    """
+    if not new_tag:
         return
     try:
-        state = json.loads(state_file.read_text())
-        candidates = state.get("duplicate_tag_candidates", [])
-        state["duplicate_tag_candidates"] = [
-            c for c in candidates if c.get("new_tag") != new_tag
-        ]
-        state_file.write_text(json.dumps(state, indent=2))
+        CLEAR_CANDIDATES_DIR.mkdir(parents=True, exist_ok=True)
+        # Use a random filename so concurrent requests don't collide. The
+        # bridge reads the tag from the file contents, not the filename.
+        marker = CLEAR_CANDIDATES_DIR / f"{uuid.uuid4().hex}.tag"
+        write_text_atomic(marker, new_tag)
+    except Exception as e:
+        log.warning("Failed to write clear-candidate marker for %s: %s", new_tag, e)
+
+
+def _sm_error_body(exc):
+    """Extract a useful error message from a failed requests call."""
+    resp = getattr(exc, "response", None)
+    if resp is None:
+        return 502, {"error": f"Spoolman unreachable: {exc}"}
+    try:
+        body = resp.json()
+        msg = body.get("message") or body.get("detail") or str(body)
     except Exception:
-        pass
+        msg = (resp.text or "").strip() or f"Spoolman returned HTTP {resp.status_code}"
+    status = resp.status_code if 400 <= resp.status_code < 600 else 502
+    return status, {"error": msg, "upstream_status": resp.status_code}
 
 
 # ============================================================
@@ -68,6 +93,18 @@ def _remove_duplicate_candidate(new_tag):
 # ============================================================
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+
+@app.errorhandler(http_requests.exceptions.RequestException)
+def _handle_spoolman_error(exc):
+    """Any unchecked Spoolman request that fails bubbles here instead of 500.
+
+    Forwards the upstream status/message so the UI shows what actually broke
+    (e.g. "attempt to write a readonly database") rather than a generic 500.
+    """
+    status, body = _sm_error_body(exc)
+    log.warning("Spoolman request failed: %s (status=%s)", body.get("error"), status)
+    return jsonify(body), status
 
 
 @app.after_request
@@ -96,6 +133,7 @@ def spool_info(spool_id):
 @app.route("/api/spools", methods=["GET"])
 def get_spools():
     r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/spool")
+    r.raise_for_status()
     return jsonify(r.json())
 
 
@@ -111,7 +149,9 @@ def create_spool():
     price = data.get("price")
 
     # Find or create vendor
-    vendors = http_requests.get(f"{SPOOLMAN_URL}/api/v1/vendor").json()
+    vr = http_requests.get(f"{SPOOLMAN_URL}/api/v1/vendor")
+    vr.raise_for_status()
+    vendors = vr.json()
     vendor = None
     for v in vendors:
         if v["name"].lower() == brand_name.lower():
@@ -123,6 +163,7 @@ def create_spool():
             f"{SPOOLMAN_URL}/api/v1/vendor",
             json={"name": brand_name, "empty_spool_weight": new_vendor_weight},
         )
+        vr.raise_for_status()
         vendor = vr.json()
 
     vendor_id = vendor["id"]
@@ -134,7 +175,9 @@ def create_spool():
     bed_temp = data.get("bed_temp")
 
     # Check for existing filament
-    filaments = http_requests.get(f"{SPOOLMAN_URL}/api/v1/filament").json()
+    fr = http_requests.get(f"{SPOOLMAN_URL}/api/v1/filament")
+    fr.raise_for_status()
+    filaments = fr.json()
     filament_id = None
     for f in filaments:
         f_mat = (f.get("material") or "").lower()
@@ -164,6 +207,7 @@ def create_spool():
         fr = http_requests.post(
             f"{SPOOLMAN_URL}/api/v1/filament", json=fil_data,
         )
+        fr.raise_for_status()
         filament_id = fr.json()["id"]
 
     # Create spool
@@ -173,18 +217,16 @@ def create_spool():
         "location": data.get("location", LOCATION_STORAGE),
     }
     sr = http_requests.post(f"{SPOOLMAN_URL}/api/v1/spool", json=spool_data)
+    sr.raise_for_status()
     return jsonify(sr.json())
 
 
 @app.route("/api/spools/from-filament/<int:filament_id>", methods=["POST"])
 def create_spool_from_filament(filament_id):
     """Create a new spool from an existing filament."""
-    try:
-        r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/filament/{filament_id}")
-        r.raise_for_status()
-        fil = r.json()
-    except http_requests.exceptions.RequestException:
-        return jsonify({"error": "Filament not found"}), 404
+    r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/filament/{filament_id}")
+    r.raise_for_status()
+    fil = r.json()
 
     weight = fil.get("weight") or 1000.0
     spool_data = {
@@ -193,88 +235,70 @@ def create_spool_from_filament(filament_id):
         "location": LOCATION_STORAGE,
     }
     sr = http_requests.post(f"{SPOOLMAN_URL}/api/v1/spool", json=spool_data)
+    sr.raise_for_status()
     return jsonify(sr.json())
 
 
 @app.route("/api/filaments", methods=["GET"])
 def get_filaments():
     r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/filament")
+    r.raise_for_status()
     return jsonify(r.json())
 
 
 @app.route("/api/filaments", methods=["POST"])
 def create_filament():
-    data = request.json or {}
-    try:
-        r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/filament", json=data)
-        r.raise_for_status()
-        return jsonify(r.json())
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/filament", json=request.json or {})
+    r.raise_for_status()
+    return jsonify(r.json())
 
 
 @app.route("/api/filaments/<int:filament_id>", methods=["PATCH"])
 def update_filament(filament_id):
-    data = request.json or {}
-    try:
-        r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/filament/{filament_id}", json=data)
-        r.raise_for_status()
-        return jsonify(r.json())
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/filament/{filament_id}", json=request.json or {})
+    r.raise_for_status()
+    return jsonify(r.json())
 
 
 @app.route("/api/filaments/<int:filament_id>", methods=["DELETE"])
 def delete_filament(filament_id):
-    try:
-        r = http_requests.delete(f"{SPOOLMAN_URL}/api/v1/filament/{filament_id}")
-        r.raise_for_status()
-        return jsonify({"deleted": filament_id})
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.delete(f"{SPOOLMAN_URL}/api/v1/filament/{filament_id}")
+    r.raise_for_status()
+    return jsonify({"deleted": filament_id})
 
 
 @app.route("/api/vendors", methods=["GET"])
 def get_vendors():
     r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/vendor")
+    r.raise_for_status()
     return jsonify(r.json())
 
 
 @app.route("/api/vendors", methods=["POST"])
 def create_vendor():
-    data = request.json or {}
-    try:
-        r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/vendor", json=data)
-        r.raise_for_status()
-        return jsonify(r.json())
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/vendor", json=request.json or {})
+    r.raise_for_status()
+    return jsonify(r.json())
 
 
 @app.route("/api/vendors/<int:vendor_id>", methods=["PATCH"])
 def update_vendor(vendor_id):
-    data = request.json or {}
-    try:
-        r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/vendor/{vendor_id}", json=data)
-        r.raise_for_status()
-        return jsonify(r.json())
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/vendor/{vendor_id}", json=request.json or {})
+    r.raise_for_status()
+    return jsonify(r.json())
 
 
 @app.route("/api/vendors/<int:vendor_id>", methods=["DELETE"])
 def delete_vendor(vendor_id):
-    try:
-        r = http_requests.delete(f"{SPOOLMAN_URL}/api/v1/vendor/{vendor_id}")
-        r.raise_for_status()
-        return jsonify({"deleted": vendor_id})
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.delete(f"{SPOOLMAN_URL}/api/v1/vendor/{vendor_id}")
+    r.raise_for_status()
+    return jsonify({"deleted": vendor_id})
 
 
 @app.route("/api/tray-status", methods=["GET"])
 def tray_status():
     r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/spool")
+    r.raise_for_status()
     spools = r.json()
 
     trays = {t: None for t in VALID_TRAYS}
@@ -317,7 +341,16 @@ def tray_status():
 def _read_jsonl(path, limit=None):
     if not path.exists():
         return []
-    events = [json.loads(l) for l in path.read_text().strip().splitlines() if l.strip()]
+    events = []
+    for line in path.read_text().strip().splitlines():
+        if not line.strip():
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError as e:
+            # One corrupt line (e.g. from a crashed mid-write) should not
+            # poison the whole endpoint — skip it and keep reading.
+            log.warning("Skipping malformed line in %s: %s", path.name, e)
     events.reverse()
     return events[:limit] if limit else events
 
@@ -353,24 +386,16 @@ def update_spool(spool_id):
     allowed = {"remaining_weight", "location", "archived", "extra"}
     payload = {k: v for k, v in data.items() if k in allowed}
 
-    try:
-        r = http_requests.patch(
-            f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json=payload,
-        )
-        r.raise_for_status()
-        return jsonify(r.json())
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json=payload)
+    r.raise_for_status()
+    return jsonify(r.json())
 
 
 @app.route("/api/spools/<int:spool_id>", methods=["DELETE"])
 def delete_spool(spool_id):
-    try:
-        r = http_requests.delete(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}")
-        r.raise_for_status()
-        return jsonify({"deleted": spool_id})
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.delete(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}")
+    r.raise_for_status()
+    return jsonify({"deleted": spool_id})
 
 
 @app.route("/api/printer-status")
@@ -381,7 +406,8 @@ def printer_status():
     try:
         state = json.loads(state_file.read_text())
         return jsonify(state)
-    except Exception:
+    except Exception as e:
+        log.warning("bridge_state.json unreadable: %s", e)
         return jsonify({"connected": False, "ams_environment": {}, "unknown_spools": []})
 
 
@@ -398,14 +424,18 @@ def link_spool():
         return jsonify({"error": "tag_uid is required"}), 400
 
     # Check if a spool with this tag already exists
-    existing = http_requests.get(f"{SPOOLMAN_URL}/api/v1/spool").json()
+    er = http_requests.get(f"{SPOOLMAN_URL}/api/v1/spool")
+    er.raise_for_status()
+    existing = er.json()
     for ex in existing:
         ex_tag = extra_unquote((ex.get("extra") or {}).get("tag", ""))
         if ex_tag == tag_uid:
             return jsonify({"spool_id": ex["id"], "linked_tag": tag_uid, "existing": True})
 
     # Find or create filament
-    filaments = http_requests.get(f"{SPOOLMAN_URL}/api/v1/filament").json()
+    fr = http_requests.get(f"{SPOOLMAN_URL}/api/v1/filament")
+    fr.raise_for_status()
+    filaments = fr.json()
     filament_id = None
     for f in filaments:
         f_mat = (f.get("material") or "").lower()
@@ -425,6 +455,7 @@ def link_spool():
             "spool_weight": 251.0,
             "vendor_id": 1,
         })
+        fil_r.raise_for_status()
         filament_id = fil_r.json().get("id")
 
     spool_r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/spool", json={
@@ -432,18 +463,20 @@ def link_spool():
         "remaining_weight": 1000,
         "location": LOCATION_AMS,
     })
+    spool_r.raise_for_status()
     spool = spool_r.json()
     spool_id = spool.get("id")
 
     if not spool_id:
         return jsonify({"error": "Failed to create spool"}), 500
 
-    http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json={
+    pr = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json={
         "extra": {
             "tag": extra_quote(tag_uid),
             "active_tray": extra_quote(tray),
         },
     })
+    pr.raise_for_status()
 
     return jsonify({"spool_id": spool_id, "linked_tag": tag_uid})
 
@@ -459,16 +492,14 @@ def resolve_duplicate_tag():
     if not spool_id or not new_tag:
         return jsonify({"error": "spool_id and new_tag_uid are required"}), 400
 
-    try:
-        http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json={
-            "extra": {
-                "tag2": extra_quote(new_tag),
-                "active_tray": extra_quote(tray),
-            },
-            "location": tray_location(tray),
-        })
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    pr = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json={
+        "extra": {
+            "tag2": extra_quote(new_tag),
+            "active_tray": extra_quote(tray),
+        },
+        "location": tray_location(tray),
+    })
+    pr.raise_for_status()
 
     _remove_duplicate_candidate(new_tag)
 
@@ -504,31 +535,24 @@ def assign_tray(spool_id, tray_name=None):
         "location": location,
     }
 
-    try:
-        r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json=payload)
-        r.raise_for_status()
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
-
+    r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json=payload)
+    r.raise_for_status()
     return jsonify(r.json())
 
 
 @app.route("/api/load-external/<int:spool_id>", methods=["POST"])
 def load_external(spool_id):
     """Configure printer's external tray with this spool via MQTT."""
-    try:
-        r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json={
-            "extra": {"active_tray": extra_quote(TRAY_EXTERNAL)},
-            "location": LOCATION_EXTERNAL,
-        })
-        r.raise_for_status()
-    except http_requests.exceptions.RequestException:
-        return jsonify({"error": "Spool not found"}), 404
+    r = http_requests.patch(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}", json={
+        "extra": {"active_tray": extra_quote(TRAY_EXTERNAL)},
+        "location": LOCATION_EXTERNAL,
+    })
+    r.raise_for_status()
 
     # Write command for bridge to publish MQTT to the printer
     cmd = {"command": "load_external", "spool_id": spool_id}
     try:
-        BRIDGE_COMMANDS_PATH.write_text(json.dumps(cmd))
+        write_json_atomic(BRIDGE_COMMANDS_PATH, cmd)
     except Exception as e:
         return jsonify({"error": f"Failed to write command: {e}"}), 500
 
@@ -540,6 +564,7 @@ def load_external(spool_id):
 @app.route("/api/tag/<int:spool_id>")
 def get_tag(spool_id):
     r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}")
+    r.raise_for_status()
     spool = r.json()
     tag = build_openspool_tag(spool)
     spool_url = f"{request.host_url}spool/{spool_id}"
@@ -595,62 +620,41 @@ def openspool_write_tag(spool_id):
 @app.route("/api/spools/<int:spool_id>/use", methods=["PUT"])
 def use_spool(spool_id):
     """Deduct filament from spool by length used (mm)."""
-    try:
-        r = http_requests.put(
-            f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}/use",
-            json=request.json or {},
-        )
-        r.raise_for_status()
-        return jsonify(r.json())
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.put(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}/use", json=request.json or {})
+    r.raise_for_status()
+    return jsonify(r.json())
 
 
 @app.route("/api/spools/<int:spool_id>/measure", methods=["PUT"])
 def measure_spool(spool_id):
     """Update spool weight from a scale measurement."""
-    try:
-        r = http_requests.put(
-            f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}/measure",
-            json=request.json or {},
-        )
-        r.raise_for_status()
-        return jsonify(r.json())
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.put(f"{SPOOLMAN_URL}/api/v1/spool/{spool_id}/measure", json=request.json or {})
+    r.raise_for_status()
+    return jsonify(r.json())
 
 
 @app.route("/api/locations", methods=["GET"])
 def get_locations():
     """List all spool locations from Spoolman."""
-    try:
-        r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/location")
-        r.raise_for_status()
-        return jsonify(r.json())
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/location")
+    r.raise_for_status()
+    return jsonify(r.json())
 
 
 @app.route("/api/materials", methods=["GET"])
 def get_materials():
     """List all materials from Spoolman."""
-    try:
-        r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/material")
-        r.raise_for_status()
-        return jsonify(r.json())
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.get(f"{SPOOLMAN_URL}/api/v1/material")
+    r.raise_for_status()
+    return jsonify(r.json())
 
 
 @app.route("/api/backup", methods=["POST"])
 def create_backup():
     """Trigger a Spoolman database backup."""
-    try:
-        r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/backup")
-        r.raise_for_status()
-        return jsonify(r.json())
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    r = http_requests.post(f"{SPOOLMAN_URL}/api/v1/backup")
+    r.raise_for_status()
+    return jsonify(r.json())
 
 
 @app.route("/api/export/<entity>", methods=["GET"])
@@ -899,7 +903,7 @@ def save_settings():
         for k in SETTINGS_KEYS:
             lines.append(f"{k}={existing.get(k, '')}")
 
-    ENV_PATH.write_text("\n".join(lines) + "\n")
+    write_text_atomic(ENV_PATH, "\n".join(lines) + "\n")
     return jsonify({"status": "ok", "message": "Settings saved. Restart services to apply."})
 
 
