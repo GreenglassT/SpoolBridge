@@ -5,6 +5,11 @@ Connects your printer's MQTT telemetry to Spoolman via a local web dashboard —
 automatically tracks which spool is in which tray, monitors prints in real time,
 and manages your filament inventory.
 
+Runs entirely on your local network: the bridge talks to the printer over its local MQTT port.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/greenglasst)
+
 ---
 
 ## Architecture
@@ -351,3 +356,15 @@ All served by `server.py` on port 5555.
 | State/IPC | JSON files (bridge_state, activity, prints, commands) |
 | Process management | systemd |
 | Runtime | Python 3 venv |
+
+---
+
+## Support
+
+SpoolBridge is free and MIT licensed. If it saves you from weighing spools by hand,
+you can [buy me a coffee on Ko-fi](https://ko-fi.com/greenglasst). Bug reports and
+pull requests are welcome too.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
