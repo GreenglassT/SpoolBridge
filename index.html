@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpoolBridge: automatic filament inventory for Bambu Lab + Spoolman</title>
+  <meta name="description" content="Free, self-hosted bridge between a Bambu Lab printer's AMS and Spoolman. Tracks which spool is in which tray, subtracts filament after every print, and runs entirely on your local network.">
+  <meta property="og:title" content="SpoolBridge">
+  <meta property="og:description" content="Your AMS keeps Spoolman up to date on its own. Free and self-hosted.">
+  <meta property="og:image" content="icon.png">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="bar">
+      <a class="by" href="https://github.com/GreenglassT">GreenglassT</a>
+      <nav>
+        <a href="https://github.com/GreenglassT/SpoolBridge">Source</a>
+        <a href="https://ko-fi.com/greenglasst">Ko-fi</a>
+      </nav>
+    </header>
+
+    <main>
+      <h1>SpoolBridge</h1>
+      <div class="front">
+        <div>
+          <p class="lede">Automatic filament inventory for Bambu Lab printers. Your AMS keeps Spoolman up to date on its own.</p>
+          <div class="actions">
+            <a class="button" href="https://github.com/GreenglassT/SpoolBridge">Get it on GitHub</a>
+            <a href="https://github.com/GreenglassT/SpoolBridge#setup">Read the setup guide</a>
+          </div>
+        </div>
+
+        <div class="label">
+          <div class="swatches" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <dl>
+            <dt>Does</dt><dd>Tracks every spool in your AMS and what each print used</dd>
+            <dt>Works with</dt><dd>Bambu Lab AMS and <a href="https://github.com/Donkie/Spoolman">Spoolman</a></dd>
+            <dt>Tested on</dt><dd>P2S with AMS 2 Pro</dd>
+            <dt>Runs on</dt><dd>Any always-on computer with Python 3</dd>
+            <dt>Connection</dt><dd>The printer's local MQTT. No cloud.</dd>
+          </dl>
+          <div class="weight">Free <span>MIT license</span></div>
+        </div>
+      </div>
+
+      <div class="ams" role="img" aria-label="Illustration of the dashboard: four AMS trays with their spool colors and amount left, one flagged low, and a print at 47 percent.">
+        <div class="ams-head">
+          <strong>AMS 1</strong>
+          <span>Humidity 18%, 27°C</span>
+        </div>
+        <div class="trays">
+          <div class="tray"><div class="spool" style="--c:#f2f2ee"></div><span class="slot">A1</span><span>White PLA</span><span class="left"><i style="--p:82%"></i></span><span class="pct">82%</span></div>
+          <div class="tray"><div class="spool" style="--c:#2b2f33"></div><span class="slot">A2</span><span>Black PETG</span><span class="left"><i style="--p:40%"></i></span><span class="pct">40%</span></div>
+          <div class="tray"><div class="spool" style="--c:#2f6fd6"></div><span class="slot">A3</span><span>Blue PLA</span><span class="left"><i style="--p:100%"></i></span><span class="pct">100%</span></div>
+          <div class="tray low"><div class="spool" style="--c:#3e9a6a"></div><span class="slot">A4</span><span>Green PLA</span><span class="left"><i style="--p:12%"></i></span><span class="pct">12%, low</span></div>
+        </div>
+        <div class="job">
+          <div class="line"><span>Printing cable_bracket.3mf from A2</span><span>Layer 112 of 240</span></div>
+          <div class="bar-track"><i></i></div>
+          <div class="line"><span>47%</span><span>38 min left</span></div>
+        </div>
+      </div>
+      <p class="ams-caption">An illustration of the dashboard. Spool colors, amounts and the live print come straight from the printer.</p>
+
+      <section aria-labelledby="does">
+        <h2 id="does">What it does</h2>
+        <dl class="spec">
+          <div><dt>Knows what's in each tray</dt><dd>Load a Bambu spool and its RFID tag is matched to the right spool in Spoolman. No typing.</dd></div>
+          <div><dt>Subtracts what you print</dt><dd>When a print finishes, the filament it used comes off that spool's remaining weight.</dd></div>
+          <div><dt>Handles third-party spools</dt><dd>Assign one to a tray in the dashboard and its filament settings are sent to the printer. Optional NFC tags in the OpenSpool format make it a tap.</dd></div>
+          <div><dt>Shows the printer live</dt><dd>Progress, temperatures, fans, AMS humidity, low-stock warnings, and a print history with success rate and estimated cost.</dd></div>
+          <div><dt>Stays on your network</dt><dd>It talks to the printer over its local MQTT connection. No cloud service in between.</dd></div>
+        </dl>
+      </section>
+
+      <div class="after">
+        <section aria-labelledby="start">
+          <h2 id="start">Getting started</h2>
+          <ol class="steps">
+            <li>Have <a href="https://github.com/Donkie/Spoolman">Spoolman</a> running somewhere on your network.</li>
+            <li>On an always-on computer, clone SpoolBridge and install it:
+              <pre><code>git clone https://github.com/GreenglassT/SpoolBridge
+cd SpoolBridge
+python3 -m venv venv &amp;&amp; source venv/bin/activate
+pip install -r requirements.txt
+python3 server.py</code></pre>
+            </li>
+            <li>Open <code>http://&lt;that-computer&gt;:5555</code>, go to Settings, and enter your printer's IP, serial number and LAN access code. They're all on the printer's touchscreen.</li>
+            <li>Start the bridge, or install both as services so they run on boot. The <a href="https://github.com/GreenglassT/SpoolBridge#4-install-as-system-services">setup guide</a> has the details.</li>
+          </ol>
+        </section>
+        <section aria-labelledby="questions">
+          <h2 id="questions">Questions</h2>
+          <dl class="faq">
+            <dt>Do I need Developer Mode or the Bambu cloud?</dt>
+            <dd>No. On the P2S it connects with the LAN access code and doesn't need Developer Mode.</dd>
+            <dt>Will it work with my X1, P1 or A1?</dt>
+            <dd>It was built on a P2S with an AMS 2 Pro. Other Bambu printers send similar MQTT messages and may work, but they haven't been tested. Reports are welcome.</dd>
+            <dt>What does it change in Spoolman?</dt>
+            <dd>It adds a few extra fields, such as the RFID tag, and keeps each spool's location and remaining weight current. Everything else stays yours.</dd>
+          </dl>
+        </section>
+      </div>
+
+      <div class="tip">
+        <p>If it saved you from weighing spools by hand, you can buy me a coffee.</p>
+        <a class="button" href="https://ko-fi.com/greenglasst">Tip on Ko-fi</a>
+      </div>
+    </main>
+
+    <footer>
+      <p>Made by <a href="https://github.com/GreenglassT">GreenglassT</a>.</p>
+      <p>Also free: <a href="https://m4bapp.com">M4B Converter</a>, which turns folders of MP3s into chaptered audiobooks on Mac.</p>
+    </footer>
+  </div>
+</body>
+</html>
